@@ -375,7 +375,7 @@ The Enhanced CLI implements techniques from:
 - **ICSE 2024**: Property-based security testing
 - **Tai-e v0.5.1**: Object-sensitive alias analysis
 
-## 🔧 **Command Reference (All Tested & Working)**
+## 🔧 **Command Reference **
 
 ### **Basic File Analysis**
 ```bash
