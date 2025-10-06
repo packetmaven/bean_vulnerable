@@ -1,0 +1,1239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bean Vulnerable - Security Analysis Report</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px;
+            color: #2c3e50;
+        }
+        
+        .banner {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .banner img {
+            max-width: 600px;
+            width: 100%;
+            height: auto;
+        }
+        
+        .generated-timestamp {
+            text-align: center;
+            color: white;
+            font-size: 14px;
+            margin-bottom: 20px;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            padding: 40px;
+        }
+        
+        .section {
+            margin-bottom: 40px;
+        }
+        
+        .section-title {
+            font-size: 32px;
+            color: #34495e;
+            border-bottom: 3px solid #3498db;
+            padding-bottom: 10px;
+            margin-bottom: 20px;
+        }
+        
+        .command-line {
+            background: #ecf0f1;
+            padding: 15px;
+            border-radius: 5px;
+            border-left: 4px solid #3498db;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            overflow-x: auto;
+        }
+        
+        .capabilities-list {
+            list-style: none;
+            padding-left: 0;
+        }
+        
+        .capabilities-list li {
+            padding: 8px 0;
+            border-bottom: 1px solid #ecf0f1;
+        }
+        
+        .capabilities-list li strong {
+            color: #2c3e50;
+        }
+        
+        .alias-header {
+            background: linear-gradient(135deg, #e8f5e9 0%, #c8e6c9 100%);
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border-left: 5px solid #4caf50;
+        }
+        
+        .alias-header h3 {
+            color: #2e7d32;
+            font-size: 24px;
+            margin-bottom: 10px;
+        }
+        
+        .alias-header p {
+            color: #558b2f;
+        }
+        
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin: 30px 0;
+        }
+        
+        .metric-card {
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            transition: transform 0.2s;
+        }
+        
+        .metric-card:hover {
+            transform: translateY(-5px);
+        }
+        
+        .metric-icon {
+            font-size: 24px;
+            margin-bottom: 10px;
+        }
+        
+        .metric-label {
+            font-size: 12px;
+            font-weight: bold;
+            color: #7f8c8d;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .metric-value {
+            font-size: 36px;
+            font-weight: bold;
+            color: #2c3e50;
+            margin: 10px 0;
+        }
+        
+        .metric-description {
+            font-size: 12px;
+            color: #95a5a6;
+        }
+        
+        .performance-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            margin: 20px 0;
+        }
+        
+        .performance-box {
+            background: #fff9e6;
+            padding: 20px;
+            border-radius: 8px;
+            border-left: 4px solid #f39c12;
+        }
+        
+        .performance-box h4 {
+            color: #e67e22;
+            margin-bottom: 15px;
+        }
+        
+        .performance-box p {
+            margin: 8px 0;
+            color: #7f8c8d;
+        }
+        
+        .performance-box strong {
+            color: #2c3e50;
+        }
+        
+        .tainted-box {
+            background: #ffe6e6;
+            padding: 20px;
+            border-radius: 8px;
+            border-left: 5px solid #e74c3c;
+            margin: 20px 0;
+        }
+        
+        .tainted-box h4 {
+            color: #c0392b;
+            margin-bottom: 15px;
+        }
+        
+        .tainted-list {
+            list-style: none;
+            padding: 0;
+        }
+        
+        .tainted-list li {
+            padding: 8px 12px;
+            margin: 5px 0;
+            background: white;
+            border-radius: 4px;
+            border-left: 3px solid #e74c3c;
+        }
+        
+        .tainted-list code {
+            background: #f8f9fa;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+            color: #c0392b;
+        }
+        
+        .tainted-list small {
+            color: #7f8c8d;
+            font-size: 11px;
+        }
+        
+        .research-note {
+            background: #e3f2fd;
+            padding: 12px;
+            border-radius: 4px;
+            border-left: 3px solid #2196f3;
+            margin-top: 15px;
+            font-size: 13px;
+            color: #1565c0;
+        }
+        
+        .triage-checklist {
+            background: #fff8e1;
+            padding: 25px;
+            border-radius: 8px;
+            border-left: 5px solid #ffc107;
+            margin: 30px 0;
+        }
+        
+        .triage-checklist h3 {
+            color: #f57c00;
+            margin-bottom: 15px;
+        }
+        
+        .triage-checklist ol {
+            padding-left: 25px;
+        }
+        
+        .triage-checklist li {
+            padding: 8px 0;
+            color: #5d4037;
+        }
+        
+        .badges-section {
+            background: #fffbea;
+            padding: 25px;
+            border-radius: 8px;
+            margin: 30px 0;
+        }
+        
+        .badges-section h3 {
+            color: #f39c12;
+            margin-bottom: 20px;
+        }
+        
+        .badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 3px;
+            font-size: 11px;
+            font-weight: bold;
+            margin: 0 5px;
+            color: white;
+        }
+        
+        .badge-vuln { background: #e74c3c; }
+        .badge-dfg-paths { background: #3498db; }
+        .badge-dfg-dot { background: #9b59b6; }
+        .badge-dfg-png { background: #f39c12; }
+        
+        .sink-list {
+            list-style: none;
+            padding: 0;
+        }
+        
+        .sink-list li {
+            padding: 10px;
+            margin: 5px 0;
+            background: #f8f9fa;
+            border-left: 3px solid #e74c3c;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+        }
+        
+        .sink-list li code {
+            color: #c0392b;
+        }
+        
+        .graudit-info {
+            background: #e8f5e9;
+            padding: 15px;
+            border-radius: 4px;
+            border-left: 3px solid #4caf50;
+            margin: 15px 0;
+        }
+        
+        .graudit-info code {
+            background: #c8e6c9;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+        }
+        
+        .graph-gallery {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 25px;
+            margin: 30px 0;
+        }
+        
+        .graph-card {
+            background: white;
+            border: 2px solid #ecf0f1;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        
+        .graph-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+        }
+        
+        .graph-card-header {
+            background: #f8f9fa;
+            padding: 15px;
+            border-bottom: 2px solid #ecf0f1;
+        }
+        
+        .graph-card-header h4 {
+            margin: 8px 0 0 0;
+            color: #2c3e50;
+            font-size: 14px;
+        }
+        
+        .graph-card-description {
+            padding: 12px 15px;
+            color: #7f8c8d;
+            font-size: 13px;
+            background: #fafbfc;
+        }
+        
+        .graph-preview {
+            padding: 15px;
+            background: white;
+            text-align: center;
+            min-height: 200px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .graph-preview img {
+            max-width: 100%;
+            max-height: 400px;
+            cursor: pointer;
+            border-radius: 4px;
+            transition: opacity 0.2s;
+        }
+        
+        .graph-preview img:hover {
+            opacity: 0.8;
+        }
+        
+        .graph-card-footer {
+            padding: 15px;
+            background: #f8f9fa;
+            border-top: 1px solid #ecf0f1;
+            text-align: center;
+        }
+        
+        .download-btn {
+            display: inline-block;
+            padding: 8px 16px;
+            margin: 4px;
+            border-radius: 5px;
+            text-decoration: none;
+            color: white;
+            font-size: 12px;
+            font-weight: bold;
+            transition: opacity 0.2s;
+        }
+        
+        .download-btn:hover {
+            opacity: 0.8;
+        }
+        
+        .download-cfg { background: #3498db; }
+        .download-dfg { background: #9b59b6; }
+        .download-pdg { background: #f39c12; }
+        .download-dot { background: #95a5a6; }
+        
+        .badge-cfg { background: #3498db; }
+        .badge-dfg { background: #9b59b6; }
+        .badge-pdg { background: #f39c12; }
+        .badge-dfg-paths { background: #3498db; }
+        .badge-dfg-dot { background: #9b59b6; }
+        .badge-cfg-dot { background: #3498db; }
+        .badge-cfg-png { background: #3498db; }
+        .badge-pdg-dot { background: #f39c12; }
+        .badge-pdg-png { background: #f39c12; }
+        .badge-dfg-png { background: #9b59b6; }
+        
+        .artifacts-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+        
+        .artifact-item {
+            background: #f8f9fa;
+            padding: 12px 15px;
+            border-radius: 6px;
+            border-left: 3px solid #3498db;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .artifact-item a {
+            color: #2c3e50;
+            text-decoration: none;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+        }
+        
+        .artifact-item a:hover {
+            color: #3498db;
+            text-decoration: underline;
+        }
+        
+        .legend-box {
+            background: #f0f8ff;
+            padding: 25px;
+            border-radius: 8px;
+            border-left: 5px solid #3498db;
+        }
+        
+        .legend-list {
+            list-style: none;
+            padding: 0;
+        }
+        
+        .legend-list li {
+            margin: 15px 0;
+            padding: 15px;
+            background: white;
+            border-radius: 6px;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.05);
+        }
+        
+        .legend-list ul {
+            margin: 10px 0 0 20px;
+            padding-left: 0;
+        }
+        
+        .legend-list ul li {
+            margin: 5px 0;
+            padding: 5px 0;
+            background: none;
+            box-shadow: none;
+            border-left: 2px solid #3498db;
+            padding-left: 15px;
+        }
+        
+        .footer {
+            text-align: center;
+            padding: 30px 0;
+            border-top: 2px solid #ecf0f1;
+            margin-top: 50px;
+            color: #7f8c8d;
+        }
+        
+        .footer small {
+            font-size: 12px;
+            line-height: 1.6;
+        }
+        
+        /* CF-Explainer Section Styles */
+        .recommendation-item {
+            display: flex;
+            align-items: flex-start;
+            padding: 15px;
+            background: white;
+            border-radius: 8px;
+            margin-bottom: 12px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            transition: all 0.3s ease;
+        }
+        
+        .recommendation-item:hover {
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            transform: translateY(-2px);
+        }
+        
+        .recommendation-item .badge {
+            margin-right: 15px;
+            min-width: 50px;
+            text-align: center;
+            font-weight: bold;
+            flex-shrink: 0;
+        }
+        
+        .recommendation-text {
+            flex: 1;
+            line-height: 1.6;
+            color: #2c3e50;
+        }
+        
+        .badge-success {
+            background: linear-gradient(135deg, #27ae60, #2ecc71);
+            color: white;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 0.9em;
+        }
+        
+        .badge-info {
+            background: linear-gradient(135deg, #3498db, #2980b9);
+            color: white;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 0.9em;
+        }
+        
+        .badge-warning {
+            background: linear-gradient(135deg, #f39c12, #e67e22);
+            color: white;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 0.9em;
+        }
+        
+        .badge-default {
+            background: linear-gradient(135deg, #95a5a6, #7f8c8d);
+            color: white;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 0.9em;
+        }
+        
+        .recommendations-list {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+        }
+    </style>
+</head>
+<body>
+    <div class="banner">
+        <img src="banner.png" alt="Bean Vulnerable" onerror="this.style.display='none'">
+    </div>
+    
+    <div class="generated-timestamp">Generated: 2025-10-06 08:48:11</div>
+    
+    <div class="container">
+        <div class="section">
+            <h2 class="section-title">Security Analysis</h2>
+            <div class="command-line">
+                <code>bean-vuln-enhanced tests/samples/VUL006_XSS_ServletResponse.java --summary --html-report production_security_audit --comprehensive</code>
+            </div>
+        </div>
+        
+        <div class="section">
+        <h3 style="color: #2c3e50; font-size: 20px; margin-bottom: 15px;">Advanced Analysis Capabilities</h3>
+        <ul class="capabilities-list">
+            <li><strong>Multi-Graph Analysis</strong>: CFG, DFG, PDG, and CPG generation with 28+ artifacts</li>
+            <li><strong>GNN Processing</strong>: Graph Neural Networks with Bayesian uncertainty quantification</li>
+            <li><strong>Type-Based Alias Analysis (TBAA)</strong>: Enhanced precision with type compatibility filtering and must-alias detection</li>
+            <li><strong>Counterfactual Explanations</strong>: Research-grade vulnerability fix suggestions</li>
+            <li><strong>Joern Integration</strong>: 15+ analysis passes for comprehensive code understanding</li>
+            <li><strong>Evidence Spans</strong>: Precise line-level vulnerability evidence with confidence scores</li>
+            <li><strong>Graph Visualizations</strong>: Interactive PNG/SVG representations of code structure</li>
+        </ul>
+    </div>
+        
+        <div class="section">
+        <div class="alias-header">
+            <h3>🔬 Alias Analysis v3.0 Results</h3>
+            <p>Enhanced precision alias tracking with field-sensitivity, batch queries, and iterative refinement.</p>
+        </div>
+        
+        <div class="metrics-grid">
+            <div class="metric-card">
+                <div class="metric-icon">📊</div>
+                <div class="metric-label">Variables Tracked</div>
+                <div class="metric-value">6</div>
+                <div class="metric-description">Total program variables</div>
+            </div>
+            
+            <div class="metric-card">
+                <div class="metric-icon">🔄</div>
+                <div class="metric-label">Field Accesses</div>
+                <div class="metric-value">3</div>
+                <div class="metric-description">Object field operations</div>
+            </div>
+            
+            <div class="metric-card">
+                <div class="metric-icon">🚨</div>
+                <div class="metric-label">Tainted Fields</div>
+                <div class="metric-value">0</div>
+                <div class="metric-description">Fields with untrusted data</div>
+            </div>
+            
+            <div class="metric-card">
+                <div class="metric-icon">🏭</div>
+                <div class="metric-label">Allocation Sites</div>
+                <div class="metric-value">0</div>
+                <div class="metric-description">new Object() locations</div>
+            </div>
+            
+            <div class="metric-card">
+                <div class="metric-icon">🔓</div>
+                <div class="metric-label">Tainted Variables</div>
+                <div class="metric-value">4</div>
+                <div class="metric-description">External input sources (OWASP/CWE)</div>
+            </div>
+            
+            <div class="metric-card">
+                <div class="metric-icon">✅</div>
+                <div class="metric-label">Sanitized Variables</div>
+                <div class="metric-value">0</div>
+                <div class="metric-description">Validated/encoded variables</div>
+            </div>
+            
+            <div class="metric-card">
+                <div class="metric-icon">🔄</div>
+                <div class="metric-label">Taint Flows</div>
+                <div class="metric-value">4</div>
+                <div class="metric-description">Propagation paths tracked</div>
+            </div>
+        </div>
+        
+        <div class="performance-grid">
+            <div class="performance-box">
+                <h4>⚙️ Refinement & Batch Query Performance</h4>
+                <p><strong>Refinement Iterations:</strong> 1 ✓ Converged</p>
+                <p><strong>Batch Queries:</strong> 6 queries</p>
+                <p><strong>Processing Mode:</strong> Sequential (optimal for fast queries)</p>
+                <p><strong>Must-Alias Pairs:</strong> 0 definite alias relationships (0 sets)</p>
+                <p><strong>Must-NOT-Alias:</strong> 0 proven non-aliases</p>
+            </div>
+            
+            <div class="performance-box">
+                <h4>🎯 Object-Sensitive Analysis (Tai-e v0.5.1)</h4>
+                <p><strong>Status:</strong> ❌ Disabled</p>
+                <p><strong>Allocation Site Mappings:</strong> 0 tracked</p>
+                <p><strong>JDK/Library Summaries:</strong> 0 loaded</p>
+                <p><strong>Accuracy Gain:</strong> +3-5% precision (PLDI 2024)</p>
+                <p>Object-sensitive analysis uses allocation sites as context to distinguish objects created at different program points, dramatically improving must-not-alias precision.</p>
+            </div>
+            
+            <div class="performance-box">
+                <h4>💡 Performance Note</h4>
+                <p>Sequential mode used: For fast alias queries (microseconds each), threading overhead (~1-2ms per thread) dominates the actual computation. Sequential processing is optimal for these queries.</p>
+                <p><strong>FSE 2024 context:</strong> The 3-10x parallel speedup applies to expensive pointer analyses (milliseconds per query), not hash table lookups. The framework automatically selects the optimal execution mode.</p>
+            </div>
+        </div>
+        
+        <div class="research-note">
+            <strong>Research Foundation:</strong> Tai-e v0.4.0 (Sept 2024), FSE 2024 (Batch Queries), PLDI 2024 (Refinement)
+        </div>
+    </div>
+        
+        <div class="section">
+        <div class="tainted-box">
+            <h4>🔓 Tainted Variables (External Input Sources)</h4>
+            <p>The following variables receive untrusted input (OWASP/CWE 2024):</p>
+            <ul class="tainted-list">
+                <li><code>input</code> - <small>Heuristic:input</small></li><li><code>request</code> - <small>Heuristic:request</small></li><li><code>response</code> - <small>Heuristic:response</small></li><li><code>userInput</code> - <small>request.getParameter()</small></li>
+            </ul>
+            <div class="research-note">
+                <strong>Research:</strong> OWASP Top 10 2024 & CWE-20/CWE-502 - Parameters with types like <code>byte[]</code>, <code>InputStream</code>, <code>HttpServletRequest</code> are considered taint sources.
+            </div>
+        </div>
+    </div>
+        
+        
+        
+        
+    <div class="section" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 10px; margin: 20px 0;">
+        <h2 style="color: white; margin-bottom: 15px;">🔬 Advanced Taint Analysis</h2>
+        <p style="color: #f0f0f0; margin-bottom: 20px;">Research-backed techniques from ACM 2024, Tai-e v0.5.1, FSE 2024, and PLDI 2024</p>
+        
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px;">
+
+            <div style="background: rgba(255,255,255,0.1); padding: 15px; border-radius: 8px; backdrop-filter: blur(10px);">
+                <h4 style="color: #ffd700; margin: 0 0 10px 0;">⚡ Implicit Flows</h4>
+                <div style="font-size: 32px; font-weight: bold; margin: 10px 0;">0</div>
+                <div style="font-size: 14px; color: #e0e0e0;">Control dependencies tracked</div>
+                <div style="font-size: 12px; color: #b0b0b0; margin-top: 5px;">ACM 2024</div>
+            </div>
+
+            <div style="background: rgba(255,255,255,0.1); padding: 15px; border-radius: 8px; backdrop-filter: blur(10px);">
+                <h4 style="color: #00ff88; margin: 0 0 10px 0;">🎯 Context-Sensitive</h4>
+                <div style="font-size: 32px; font-weight: bold; margin: 10px 0;">3</div>
+                <div style="font-size: 14px; color: #e0e0e0;">Calling contexts (k=3)</div>
+                <div style="font-size: 12px; color: #b0b0b0; margin-top: 5px;">Tai-e v0.5.1</div>
+            </div>
+
+            <div style="background: rgba(255,255,255,0.1); padding: 15px; border-radius: 8px; backdrop-filter: blur(10px);">
+                <h4 style="color: #ff6b6b; margin: 0 0 10px 0;">🛤️ Path-Sensitive</h4>
+                <div style="font-size: 32px; font-weight: bold; margin: 10px 0;">0/0</div>
+                <div style="font-size: 14px; color: #e0e0e0;">Feasible paths / branches</div>
+                <div style="font-size: 12px; color: #b0b0b0; margin-top: 5px;">Symbolic Execution</div>
+            </div>
+
+            <div style="background: rgba(255,255,255,0.1); padding: 15px; border-radius: 8px; backdrop-filter: blur(10px);">
+                <h4 style="color: #4ecdc4; margin: 0 0 10px 0;">🔧 Native (JNI)</h4>
+                <div style="font-size: 32px; font-weight: bold; margin: 10px 0;">0/0</div>
+                <div style="font-size: 14px; color: #e0e0e0;">Taint transfers / methods</div>
+                <div style="font-size: 12px; color: #b0b0b0; margin-top: 5px;">JNI Tracking</div>
+            </div>
+
+            <div style="background: rgba(255,255,255,0.1); padding: 15px; border-radius: 8px; backdrop-filter: blur(10px);">
+                <h4 style="color: #ffa500; margin: 0 0 10px 0;">🔗 Interprocedural</h4>
+                <div style="font-size: 32px; font-weight: bold; margin: 10px 0;">2/2</div>
+                <div style="font-size: 14px; color: #e0e0e0;">Methods with taint / total</div>
+                <div style="font-size: 12px; color: #b0b0b0; margin-top: 5px;">TAJ System</div>
+            </div>
+
+        </div>
+    </div>
+
+        
+        <div class="section">
+        <div class="triage-checklist">
+            <h3>📋 Triage Checklist</h3>
+            <ol>
+                <li>Open <em>graph</em> (PNG)</li>
+                <li>Confirm sink (badges/tags) - Check if detected vulnerabilities match known security sinks</li>
+                <li>Read <em>paths</em> (DFG evidence)</li>
+                <li>Jump to <em>method:line</em> in source</li>
+                <li>Decide: exploitability, patch, or deeper analysis</li>
+            </ol>
+        </div>
+    </div>
+        
+        <div class="section">
+        <div class="badges-section">
+            <h3>🏷️ Understanding Badges & Tags</h3>
+            
+            <h4 style="margin-top: 20px;">💡 What the Badges Mean:</h4>
+            <ul style="list-style: none; padding: 0;">
+                <li style="margin: 10px 0;"><span class="badge badge-vuln">VULN</span> <strong>- Vulnerability Detected</strong>: The GNN identified a security issue with confidence score</li>
+                <li style="margin: 10px 0;"><span class="badge badge-dfg-paths">DFG PATHS</span> <strong>- Data Flow Graph Paths</strong>: Text file showing how tainted data flows to security sinks</li>
+                <li style="margin: 10px 0;"><span class="badge badge-dfg-dot">DFG DOT</span> <strong>- Graph Description</strong>: DOT format graph for Graphviz visualization</li>
+                <li style="margin: 10px 0;"><span class="badge badge-dfg-png">DFG PNG</span> <strong>- Visual Graph</strong>: Rendered image showing the program dependence graph</li>
+            </ul>
+            
+            <h4 style="margin-top: 30px;">🎯 What "Confirm Sink" Means:</h4>
+            <p style="margin-bottom: 15px;"><strong>Security sinks</strong> are dangerous functions where untrusted data should not flow. When you see a vulnerability badge, check if it corresponds to a real security sink:</p>
+            <ul class="sink-list">
+                <li><code>Runtime.exec()</code>, <code>ProcessBuilder</code> → Command Injection</li>
+                <li><code>Statement.execute()</code> → SQL Injection</li>
+                <li><code>ObjectInputStream.readObject()</code> → Deserialization</li>
+                <li><code>URL.openConnection()</code> → SSRF/HTTP attacks</li>
+                <li><code>Files.write()</code>, <code>FileOutputStream</code> → Path Traversal</li>
+                <li><code>Class.forName()</code>, <code>Method.invoke()</code> → Reflection Injection</li>
+            </ul>
+            <p style="margin-top: 15px;">The <strong>method:line</strong> links show exactly where these sinks are called in your code.</p>
+            
+            <h4 style="margin-top: 30px;">🔍 Using Graudit Sinks:</h4>
+            <div class="graudit-info">
+                <p>When <code>--sink-signature-preset graudit-java</code> is used, the analysis includes 40+ security-sensitive patterns from the Graudit security scanner, providing comprehensive coverage of potential vulnerabilities.</p>
+            </div>
+        </div>
+    </div>
+        
+        <div class="section">
+        <h3 style="color: #2c3e50; font-size: 20px; margin-bottom: 15px;">📊 Findings</h3>
+        <div class="metrics-grid" style="grid-template-columns: repeat(3, 1fr);">
+            <div class="metric-card">
+                <div class="metric-label">Vulnerability Status</div>
+                <div class="metric-value" style="color: #e74c3c;">🚨 VULNERABLE</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">Confidence</div>
+                <div class="metric-value">86.8%</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">Vulnerability Type</div>
+                <div class="metric-value" style="font-size: 18px;">xss</div>
+            </div>
+        </div>
+    </div>
+        
+        <div class="section">
+        <div style="background: #ffffff; padding: 15px 20px; border-radius: 8px; border: 1px solid #e0e0e0; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
+            <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 20px;">
+                <div style="display: flex; align-items: center; gap: 20px;">
+                    <div><span style="background: #e74c3c; color: white; padding: 6px 12px; border-radius: 4px; font-weight: bold; font-size: 14px;">VULN</span></div>
+                    <div>
+                        <strong style="color: #2c3e50; font-size: 16px; display: block;">VUL006_XSS_ServletResponse.java</strong>
+                        <span style="color: #7f8c8d; font-size: 13px;">Confidence: 0.868</span>
+                    </div>
+                </div>
+                <div style="font-size: 15px; color: #3498db;">
+                    <a href="dfg_paths.txt" style="color: #3498db; text-decoration: none; font-weight: 500;">paths</a> | <a href="#graph-gallery" style="color: #3498db; text-decoration: none; font-weight: 500;">CFG</a> | <a href="#graph-gallery" style="color: #3498db; text-decoration: none; font-weight: 500;">DFG</a> | <a href="VUL006_XSS_ServletResponse.java" style="color: #3498db; text-decoration: none; font-weight: 500;">source</a>
+                </div>
+            </div>
+        </div>
+    </div>
+        
+        
+    <div class="section" id="cf-explainer" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; border-radius: 12px; margin: 30px 0; box-shadow: 0 10px 30px rgba(102, 126, 234, 0.3);">
+        <div style="background: white; padding: 30px; border-radius: 10px;">
+            <h2 class="section-title" style="color: #2c3e50; margin-bottom: 20px; display: flex; align-items: center;">
+                <span style="font-size: 1.5em; margin-right: 15px;">💡</span>
+                Counterfactual Explanation & Security Remediation
+                <span class="badge badge-success" style="margin-left: 15px; font-size: 0.6em; padding: 5px 15px;">Enhanced CF-Explainer</span>
+            </h2>
+            
+            <div class="alert alert-info" style="background: #e3f2fd; border-left: 4px solid #2196f3; padding: 15px; margin-bottom: 25px; border-radius: 6px;">
+                <strong>ℹ️ About Counterfactual Explanations:</strong>
+                This section provides research-grade vulnerability remediation guidance generated by our enhanced CF-Explainer.
+                It answers: <em>"What is the minimal change needed to make this code secure?"</em>
+            </div>
+            
+            
+            
+            
+        <div class="cf-recommendations">
+            <h3 style="color: #2c3e50; margin-bottom: 15px; display: flex; align-items: center;">
+                <span style="font-size: 1.3em; margin-right: 10px;">🔍</span>
+                Counterfactual Analysis Status
+            </h3>
+            <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; border-left: 4px solid #3498db;">
+                <p style="margin: 0; color: #2c3e50;">CF-Explainer is analyzing the vulnerability pattern to generate specific code modifications. This requires the trained GNN model to identify minimal changes that would make the code safe.</p>
+                <p style="margin: 10px 0 0 0; color: #7f8c8d; font-size: 0.9em;">
+                    💡 The CF-Explainer is analyzing the vulnerability to generate specific remediation recommendations.
+                </p>
+            </div>
+        </div>
+        
+            
+            
+        <div class="cf-guidance" style="margin-top: 25px;">
+            <h3 style="color: #2c3e50; margin-bottom: 15px; display: flex; align-items: center;">
+                <span style="font-size: 1.3em; margin-right: 10px;">🔧</span>
+                Developer Guidance
+            </h3>
+            <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; border-left: 4px solid #3498db;">
+                <p style="margin: 10px 0; line-height: 1.6;">CF-Explainer is analyzing the vulnerability pattern to generate specific code modifications. This requires the trained GNN model to identify minimal changes that would make the code safe.</p>
+            </div>
+        </div>
+        
+            
+            
+            
+            <div style="margin-top: 30px; padding: 15px; background: #fff3cd; border-left: 4px solid #ffc107; border-radius: 6px;">
+                <strong>⚠️ Important:</strong> While these recommendations are based on advanced analysis and research-grade patterns,
+                always review and test security fixes in your specific context before deploying to production.
+            </div>
+        </div>
+    </div>
+    
+        
+        <div class="section" id="graph-gallery">
+        <h2 class="section-title">📊 Graph Gallery</h2>
+        <div class="graph-gallery">
+            
+            <div class="graph-card">
+                <div class="graph-card-header">
+                    <span class="badge badge-cfg">CFG</span>
+                    <h4>cfg_slice.png</h4>
+                </div>
+                <div class="graph-card-description">Control Flow Graph (execution paths)</div>
+                <div class="graph-preview">
+                    <img src="cfg_slice.png" alt="Control Flow Graph (execution paths)" onclick="window.open('cfg_slice.png', '_blank')">
+                </div>
+                <div class="graph-card-footer">
+                    <a href="cfg_slice.png" download class="download-btn download-cfg">📥 Download CFG</a> <a href="cfg_slice.dot" download class="download-btn download-dot">📥 Download DOT</a>
+                </div>
+            </div>
+            
+            <div class="graph-card">
+                <div class="graph-card-header">
+                    <span class="badge badge-cfg">CFG</span>
+                    <h4>cfg_slice1.png</h4>
+                </div>
+                <div class="graph-card-description">Control Flow Graph (execution paths)</div>
+                <div class="graph-preview">
+                    <img src="cfg_slice1.png" alt="Control Flow Graph (execution paths)" onclick="window.open('cfg_slice1.png', '_blank')">
+                </div>
+                <div class="graph-card-footer">
+                    <a href="cfg_slice1.png" download class="download-btn download-cfg">📥 Download CFG</a> <a href="cfg_slice1.dot" download class="download-btn download-dot">📥 Download DOT</a>
+                </div>
+            </div>
+            
+            <div class="graph-card">
+                <div class="graph-card-header">
+                    <span class="badge badge-cfg">CFG</span>
+                    <h4>cfg_slice2.png</h4>
+                </div>
+                <div class="graph-card-description">Control Flow Graph (execution paths)</div>
+                <div class="graph-preview">
+                    <img src="cfg_slice2.png" alt="Control Flow Graph (execution paths)" onclick="window.open('cfg_slice2.png', '_blank')">
+                </div>
+                <div class="graph-card-footer">
+                    <a href="cfg_slice2.png" download class="download-btn download-cfg">📥 Download CFG</a> <a href="cfg_slice2.dot" download class="download-btn download-dot">📥 Download DOT</a>
+                </div>
+            </div>
+            
+            <div class="graph-card">
+                <div class="graph-card-header">
+                    <span class="badge badge-dfg">DFG</span>
+                    <h4>dfg_slice1.png</h4>
+                </div>
+                <div class="graph-card-description">Data Flow Graph (taint propagation)</div>
+                <div class="graph-preview">
+                    <img src="dfg_slice1.png" alt="Data Flow Graph (taint propagation)" onclick="window.open('dfg_slice1.png', '_blank')">
+                </div>
+                <div class="graph-card-footer">
+                    <a href="dfg_slice1.png" download class="download-btn download-dfg">📥 Download DFG</a> <a href="dfg_slice1.dot" download class="download-btn download-dot">📥 Download DOT</a>
+                </div>
+            </div>
+            
+            <div class="graph-card">
+                <div class="graph-card-header">
+                    <span class="badge badge-dfg">DFG</span>
+                    <h4>dfg_slice2.png</h4>
+                </div>
+                <div class="graph-card-description">Data Flow Graph (taint propagation)</div>
+                <div class="graph-preview">
+                    <img src="dfg_slice2.png" alt="Data Flow Graph (taint propagation)" onclick="window.open('dfg_slice2.png', '_blank')">
+                </div>
+                <div class="graph-card-footer">
+                    <a href="dfg_slice2.png" download class="download-btn download-dfg">📥 Download DFG</a> <a href="dfg_slice2.dot" download class="download-btn download-dot">📥 Download DOT</a>
+                </div>
+            </div>
+            
+            <div class="graph-card">
+                <div class="graph-card-header">
+                    <span class="badge badge-dfg">DFG</span>
+                    <h4>dfg_slice3.png</h4>
+                </div>
+                <div class="graph-card-description">Data Flow Graph (taint propagation)</div>
+                <div class="graph-preview">
+                    <img src="dfg_slice3.png" alt="Data Flow Graph (taint propagation)" onclick="window.open('dfg_slice3.png', '_blank')">
+                </div>
+                <div class="graph-card-footer">
+                    <a href="dfg_slice3.png" download class="download-btn download-dfg">📥 Download DFG</a> <a href="dfg_slice3.dot" download class="download-btn download-dot">📥 Download DOT</a>
+                </div>
+            </div>
+            
+            <div class="graph-card">
+                <div class="graph-card-header">
+                    <span class="badge badge-pdg">PDG</span>
+                    <h4>pdg_slice.png</h4>
+                </div>
+                <div class="graph-card-description">Program Dependence Graph (CFG + DDG combined)</div>
+                <div class="graph-preview">
+                    <img src="pdg_slice.png" alt="Program Dependence Graph (CFG + DDG combined)" onclick="window.open('pdg_slice.png', '_blank')">
+                </div>
+                <div class="graph-card-footer">
+                    <a href="pdg_slice.png" download class="download-btn download-pdg">📥 Download PDG</a> <a href="pdg_slice.dot" download class="download-btn download-dot">📥 Download DOT</a>
+                </div>
+            </div>
+            
+            <div class="graph-card">
+                <div class="graph-card-header">
+                    <span class="badge badge-pdg">PDG</span>
+                    <h4>pdg_slice1.png</h4>
+                </div>
+                <div class="graph-card-description">Program Dependence Graph (CFG + DDG combined)</div>
+                <div class="graph-preview">
+                    <img src="pdg_slice1.png" alt="Program Dependence Graph (CFG + DDG combined)" onclick="window.open('pdg_slice1.png', '_blank')">
+                </div>
+                <div class="graph-card-footer">
+                    <a href="pdg_slice1.png" download class="download-btn download-pdg">📥 Download PDG</a> <a href="pdg_slice1.dot" download class="download-btn download-dot">📥 Download DOT</a>
+                </div>
+            </div>
+            
+            <div class="graph-card">
+                <div class="graph-card-header">
+                    <span class="badge badge-pdg">PDG</span>
+                    <h4>pdg_slice2.png</h4>
+                </div>
+                <div class="graph-card-description">Program Dependence Graph (CFG + DDG combined)</div>
+                <div class="graph-preview">
+                    <img src="pdg_slice2.png" alt="Program Dependence Graph (CFG + DDG combined)" onclick="window.open('pdg_slice2.png', '_blank')">
+                </div>
+                <div class="graph-card-footer">
+                    <a href="pdg_slice2.png" download class="download-btn download-pdg">📥 Download PDG</a> <a href="pdg_slice2.dot" download class="download-btn download-dot">📥 Download DOT</a>
+                </div>
+            </div>
+            
+        </div>
+    </div>
+        
+        <div class="section">
+        <h2 class="section-title">📦 All Artifacts</h2>
+        <div class="artifacts-list">
+            
+            <div class="artifact-item">
+                <span class="badge badge-file">FILE</span>
+                <a href="VUL006_XSS_ServletResponse.java" download>VUL006_XSS_ServletResponse.java</a>
+            </div>
+            
+            <div class="artifact-item">
+                <span class="badge badge-cfg-dot">CFG DOT</span>
+                <a href="cfg_slice.dot" download>cfg_slice.dot</a>
+            </div>
+            
+            <div class="artifact-item">
+                <span class="badge badge-cfg-png">CFG PNG</span>
+                <a href="cfg_slice.png" download>cfg_slice.png</a>
+            </div>
+            
+            <div class="artifact-item">
+                <span class="badge badge-svg">SVG</span>
+                <a href="cfg_slice.svg" download>cfg_slice.svg</a>
+            </div>
+            
+            <div class="artifact-item">
+                <span class="badge badge-cfg-dot">CFG DOT</span>
+                <a href="cfg_slice1.dot" download>cfg_slice1.dot</a>
+            </div>
+            
+            <div class="artifact-item">
+                <span class="badge badge-cfg-png">CFG PNG</span>
+                <a href="cfg_slice1.png" download>cfg_slice1.png</a>
+            </div>
+            
+            <div class="artifact-item">
+                <span class="badge badge-svg">SVG</span>
+                <a href="cfg_slice1.svg" download>cfg_slice1.svg</a>
+            </div>
+            
+            <div class="artifact-item">
+                <span class="badge badge-cfg-dot">CFG DOT</span>
+                <a href="cfg_slice2.dot" download>cfg_slice2.dot</a>
+            </div>
+            
+            <div class="artifact-item">
+                <span class="badge badge-cfg-png">CFG PNG</span>
+                <a href="cfg_slice2.png" download>cfg_slice2.png</a>
+            </div>
+            
+            <div class="artifact-item">
+                <span class="badge badge-svg">SVG</span>
+                <a href="cfg_slice2.svg" download>cfg_slice2.svg</a>
+            </div>
+            
+            <div class="artifact-item">
+                <span class="badge badge-txt">TXT</span>
+                <a href="dfg_paths.txt" download>dfg_paths.txt</a>
+            </div>
+            
+            <div class="artifact-item">
+                <span class="badge badge-dfg-dot">DFG DOT</span>
+                <a href="dfg_slice1.dot" download>dfg_slice1.dot</a>
+            </div>
+            
+            <div class="artifact-item">
+                <span class="badge badge-dfg-png">DFG PNG</span>
+                <a href="dfg_slice1.png" download>dfg_slice1.png</a>
+            </div>
+            
+            <div class="artifact-item">
+                <span class="badge badge-svg">SVG</span>
+                <a href="dfg_slice1.svg" download>dfg_slice1.svg</a>
+            </div>
+            
+            <div class="artifact-item">
+                <span class="badge badge-dfg-dot">DFG DOT</span>
+                <a href="dfg_slice2.dot" download>dfg_slice2.dot</a>
+            </div>
+            
+            <div class="artifact-item">
+                <span class="badge badge-dfg-png">DFG PNG</span>
+                <a href="dfg_slice2.png" download>dfg_slice2.png</a>
+            </div>
+            
+            <div class="artifact-item">
+                <span class="badge badge-svg">SVG</span>
+                <a href="dfg_slice2.svg" download>dfg_slice2.svg</a>
+            </div>
+            
+            <div class="artifact-item">
+                <span class="badge badge-dfg-dot">DFG DOT</span>
+                <a href="dfg_slice3.dot" download>dfg_slice3.dot</a>
+            </div>
+            
+            <div class="artifact-item">
+                <span class="badge badge-dfg-png">DFG PNG</span>
+                <a href="dfg_slice3.png" download>dfg_slice3.png</a>
+            </div>
+            
+            <div class="artifact-item">
+                <span class="badge badge-svg">SVG</span>
+                <a href="dfg_slice3.svg" download>dfg_slice3.svg</a>
+            </div>
+            
+            <div class="artifact-item">
+                <span class="badge badge-pdg-dot">PDG DOT</span>
+                <a href="pdg_slice.dot" download>pdg_slice.dot</a>
+            </div>
+            
+            <div class="artifact-item">
+                <span class="badge badge-pdg-png">PDG PNG</span>
+                <a href="pdg_slice.png" download>pdg_slice.png</a>
+            </div>
+            
+            <div class="artifact-item">
+                <span class="badge badge-svg">SVG</span>
+                <a href="pdg_slice.svg" download>pdg_slice.svg</a>
+            </div>
+            
+            <div class="artifact-item">
+                <span class="badge badge-pdg-dot">PDG DOT</span>
+                <a href="pdg_slice1.dot" download>pdg_slice1.dot</a>
+            </div>
+            
+            <div class="artifact-item">
+                <span class="badge badge-pdg-png">PDG PNG</span>
+                <a href="pdg_slice1.png" download>pdg_slice1.png</a>
+            </div>
+            
+            <div class="artifact-item">
+                <span class="badge badge-svg">SVG</span>
+                <a href="pdg_slice1.svg" download>pdg_slice1.svg</a>
+            </div>
+            
+            <div class="artifact-item">
+                <span class="badge badge-pdg-dot">PDG DOT</span>
+                <a href="pdg_slice2.dot" download>pdg_slice2.dot</a>
+            </div>
+            
+            <div class="artifact-item">
+                <span class="badge badge-pdg-png">PDG PNG</span>
+                <a href="pdg_slice2.png" download>pdg_slice2.png</a>
+            </div>
+            
+            <div class="artifact-item">
+                <span class="badge badge-svg">SVG</span>
+                <a href="pdg_slice2.svg" download>pdg_slice2.svg</a>
+            </div>
+            
+        </div>
+    </div>
+        
+        <div class="section">
+        <h2 class="section-title">📖 Graph Legend & Color Guide</h2>
+        
+        <div class="legend-box" style="background: #ffffff; padding: 25px; border-radius: 8px; border: 1px solid #e0e0e0; margin-bottom: 20px;">
+            <h3 style="color: #2c3e50; margin-bottom: 20px; font-size: 18px;">🎨 Visual Elements</h3>
+            
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; margin-bottom: 30px;">
+                
+                <!-- Tainted Nodes -->
+                <div style="padding: 15px; background: #f8f4ff; border-left: 4px solid #9370DB; border-radius: 4px;">
+                    <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+                        <div style="width: 50px; height: 35px; background: #E6E6FA; border: 3px solid #9370DB; border-radius: 4px;"></div>
+                        <strong style="color: #7d3c98;">Tainted Nodes</strong>
+                    </div>
+                    <p style="color: #666; font-size: 13px; margin: 0;">Variables/data containing untrusted input that could lead to vulnerabilities</p>
+                </div>
+                
+                <!-- Data Flow -->
+                <div style="padding: 15px; background: #fff5f5; border-left: 4px solid #DC143C; border-radius: 4px;">
+                    <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+                        <div style="width: 50px; height: 3px; background: transparent; border-top: 3px dashed #DC143C;"></div>
+                        <strong style="color: #c0392b;">Data Flow (DDG)</strong>
+                    </div>
+                    <p style="color: #666; font-size: 13px; margin: 0;">Red dotted lines show how data dependencies flow between statements</p>
+                </div>
+                
+                <!-- Control Flow -->
+                <div style="padding: 15px; background: #f0f8ff; border-left: 4px solid #0055A4; border-radius: 4px;">
+                    <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+                        <div style="width: 50px; height: 3px; background: #0055A4;"></div>
+                        <strong style="color: #004080;">Control Flow (CDG/CFG)</strong>
+                    </div>
+                    <p style="color: #666; font-size: 13px; margin: 0;">French blue solid lines show program execution order and control dependencies</p>
+                </div>
+                
+                <!-- AST Structure -->
+                <div style="padding: 15px; background: #f8f8f8; border-left: 4px solid #B0B0B0; border-radius: 4px;">
+                    <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+                        <div style="width: 50px; height: 3px; background: #B0B0B0;"></div>
+                        <strong style="color: #666;">AST Structure</strong>
+                    </div>
+                    <p style="color: #666; font-size: 13px; margin: 0;">Gray solid lines show abstract syntax tree relationships between code elements</p>
+                </div>
+                
+            </div>
+            
+            <h3 style="color: #2c3e50; margin-bottom: 15px; margin-top: 30px; font-size: 18px;">📊 Graph Types</h3>
+            
+            <ul class="legend-list" style="list-style: none; padding: 0;">
+                <li style="margin-bottom: 20px; padding: 15px; background: #f8f9fa; border-radius: 6px;">
+                    <strong style="color: #e67e22; font-size: 16px;">PDG (Program Dependence Graph)</strong>
+                    <p style="margin: 8px 0 0 0; color: #555; line-height: 1.6;">
+                        The most comprehensive view combining <strong>control flow (French blue)</strong> and <strong>data dependencies (red dotted)</strong>. 
+                        Shows both how the program executes and how data moves between statements. Use this to trace vulnerability paths.
+                    </p>
+                </li>
+                
+                <li style="margin-bottom: 20px; padding: 15px; background: #f8f9fa; border-radius: 6px;">
+                    <strong style="color: #9b59b6; font-size: 16px;">DFG (Data Flow Graph)</strong>
+                    <p style="margin: 8px 0 0 0; color: #555; line-height: 1.6;">
+                        Shows how <strong style="color: #E6E6FA; background: #7d3c98; padding: 2px 6px; border-radius: 3px;">tainted data</strong> propagates from sources to sinks. 
+                        Includes AST structure (gray), control flow (French blue), and data dependencies (red dotted). 
+                        The <code style="background: #e8e8e8; padding: 2px 6px; border-radius: 3px;">dfg_paths.txt</code> file contains textual flow descriptions.
+                    </p>
+                </li>
+                
+                <li style="padding: 15px; background: #f8f9fa; border-radius: 6px;">
+                    <strong style="color: #3498db; font-size: 16px;">CFG (Control Flow Graph)</strong>
+                    <p style="margin: 8px 0 0 0; color: #555; line-height: 1.6;">
+                        Shows execution paths through the program with <strong style="color: #0055A4;">French blue lines</strong>. 
+                        Each node represents a statement or basic block. Use this to understand branching logic and reachable code paths.
+                    </p>
+                </li>
+            </ul>
+        </div>
+        
+        <div style="background: #fff3cd; padding: 15px; border-left: 4px solid #ffc107; border-radius: 4px; margin-top: 15px;">
+            <strong style="color: #856404;">💡 Analysis Tip:</strong>
+            <p style="color: #856404; margin: 8px 0 0 0;">
+                Look for <span style="background: #E6E6FA; color: #7d3c98; padding: 2px 6px; border-radius: 3px; font-weight: bold;">lavender (tainted) nodes</span> 
+                connected by <span style="color: #DC143C; font-weight: bold;">red dotted data flow lines</span> to security-sensitive sinks. 
+                This pattern indicates potential vulnerabilities where untrusted input reaches dangerous functions.
+            </p>
+        </div>
+    </div>
+        
+        <div class="footer">
+        <small>
+            Generated by <strong>Bean Vulnerable GNN Framework v2.0.0</strong><br>
+            Research Foundation: OWASP Top 10 2024, CWE-20/CWE-502, ACM 2024, Tai-e v0.4.0 (Sept 2024), FSE 2024, PLDI 2024, Seneca (arXiv Nov 2023)<br>
+            Advanced features: 3-Tier Taint Tracking, Field-Sensitive Alias Analysis, Bayesian Uncertainty Quantification, CESCL Loss
+        </small>
+    </div>
+    </div>
+</body>
+</html>
