@@ -1,0 +1,291 @@
+[
+  {
+    "vulnerability_detected": true,
+    "vulnerability_type": "deserialization",
+    "confidence": 0.6750563139403487,
+    "traditional_confidence": 1.0,
+    "bayesian_confidence": 0.7871637895757663,
+    "vulnerabilities_found": [
+      "deserialization"
+    ],
+    "cpg": {
+      "nodes": 147,
+      "edges": 31,
+      "methods": 9,
+      "calls": 13
+    },
+    "joern_available": true,
+    "gnn_utilized": true,
+    "analysis_method": "bayesian_integrated_pipeline",
+    "source_length": 601,
+    "uncertainty_metrics": {
+      "mean_prediction": 0.7871637895757663,
+      "variance": 6.458692242704075e-05,
+      "epistemic_uncertainty": 6.458692242704075e-05,
+      "aleatoric_uncertainty": 0.1,
+      "total_uncertainty": 0.10006458692242705,
+      "confidence_interval": {
+        "lower": 0.7714120556649957,
+        "upper": 0.8029155234865368
+      },
+      "uncertainty_category": "medium",
+      "prediction_reliability": "reliable"
+    },
+    "routing_decision": {
+      "routing_decision": "automated_processing",
+      "recommendation": "Low uncertainty - proceed with automated analysis",
+      "action": "continue",
+      "uncertainty_level": "medium",
+      "requires_attention": false
+    },
+    "requires_manual_review": false,
+    "graph_sanity": {
+      "nodes": 147,
+      "edges": 31,
+      "density": 0.001444,
+      "methods_per_k_nodes": 61.224,
+      "calls_per_k_nodes": 88.435,
+      "anomaly": false
+    },
+    "evidence_spans": [],
+    "cescl_results": {
+      "cescl_loss": 3.434191942214966,
+      "contrastive_component": 3.434069871902466,
+      "cluster_component": 0.00012211539433337748,
+      "metrics": {
+        "avg_intra_class_distance": 0.0001221153979713563,
+        "avg_inter_class_distance": 9.5367431640625e-06,
+        "num_classes": 2,
+        "cluster_separation_ratio": 0.07809615595159804
+      },
+      "improved_confidence": 0.40047699527510555
+    },
+    "cescl_confidence": 0.40047699527510555,
+    "loss_components": {
+      "cescl_loss": 3.434191942214966,
+      "contrastive_component": 3.434069871902466,
+      "cluster_component": 0.00012211539433337748
+    },
+    "cluster_metrics": {
+      "avg_intra_class_distance": 0.0001221153979713563,
+      "avg_inter_class_distance": 9.5367431640625e-06,
+      "num_classes": 2,
+      "cluster_separation_ratio": 0.07809615595159804
+    },
+    "taint_tracking": {
+      "tainted_variables_count": 6,
+      "tainted_fields_count": 0,
+      "taint_flows_count": 6,
+      "tainted_variables": [
+        "bis",
+        "data",
+        "input",
+        "obj",
+        "objStream",
+        "ois"
+      ],
+      "tainted_fields": [],
+      "taint_flows": [
+        {
+          "target": "data",
+          "source": "Heuristic:data",
+          "is_sanitized": false,
+          "implicit_flow": false
+        },
+        {
+          "target": "bis",
+          "source": "Framework:InputStream",
+          "is_sanitized": false,
+          "implicit_flow": false
+        },
+        {
+          "target": "ois",
+          "source": "Framework:InputStream",
+          "is_sanitized": false,
+          "implicit_flow": false
+        },
+        {
+          "target": "input",
+          "source": "Heuristic:input",
+          "is_sanitized": false,
+          "implicit_flow": false
+        },
+        {
+          "target": "objStream",
+          "source": "Framework:InputStream",
+          "is_sanitized": false,
+          "implicit_flow": false
+        },
+        {
+          "target": "obj",
+          "source": "objStream.readObject()",
+          "is_sanitized": false,
+          "implicit_flow": false
+        }
+      ],
+      "taint_assignments": {
+        "data": "Heuristic:data",
+        "bis": "Framework:InputStream",
+        "ois": "Framework:InputStream",
+        "input": "Heuristic:input",
+        "objStream": "Framework:InputStream",
+        "obj": "objStream.readObject()"
+      },
+      "alias_analysis": {
+        "variables_tracked": 5,
+        "allocation_sites": 3,
+        "field_accesses": 3,
+        "must_not_alias_pairs": 0,
+        "cache_size": 15,
+        "refinement_iterations": 1,
+        "variable_to_allocation_mappings": 4,
+        "library_summaries_loaded": 12,
+        "object_sensitive_enabled": true
+      },
+      "implicit_flows": {
+        "count": 0,
+        "variables": {},
+        "research": "ACM 2024: Control Flow Sensitivity"
+      },
+      "interprocedural_analysis": {
+        "methods_analyzed": 3,
+        "methods_with_tainted_params": 2,
+        "methods_returning_tainted": 1,
+        "summaries": {
+          "vulnerableDeserialize": {
+            "params": [
+              "data"
+            ],
+            "tainted_params": [
+              "data"
+            ],
+            "returns_tainted": true,
+            "return_type": "Object",
+            "contexts": []
+          },
+          "vulnerableObjectProcessing": {
+            "params": [
+              "input"
+            ],
+            "tainted_params": [
+              "input"
+            ],
+            "returns_tainted": false,
+            "return_type": "void",
+            "contexts": []
+          },
+          "processObject": {
+            "params": [
+              "obj"
+            ],
+            "tainted_params": [],
+            "returns_tainted": false,
+            "return_type": "void",
+            "contexts": []
+          }
+        },
+        "research": "TAJ System: Cross-Method Taint Transfer"
+      },
+      "context_sensitive_analysis": {
+        "contexts_tracked": 2,
+        "k_cfa_limit": 2,
+        "call_contexts": {},
+        "context_tainted_vars": {
+          "vulnerableDeserialize:vulnerableDeserialize": [
+            "data"
+          ],
+          "vulnerableObjectProcessing:vulnerableObjectProcessing": [
+            "input"
+          ]
+        },
+        "research": "Tai-e v0.5.1: k-Call-Site Sensitivity"
+      },
+      "path_sensitive_analysis": {
+        "branching_points": 0,
+        "feasible_paths": 0,
+        "infeasible_paths": 0,
+        "path_tainted_vars": {},
+        "research": "Symbolic Execution: Path Feasibility Analysis"
+      },
+      "native_code_analysis": {
+        "native_methods_declared": 0,
+        "native_taint_transfers": 0,
+        "loaded_libraries": [],
+        "transfers": [],
+        "research": "JNI Taint Propagation"
+      },
+      "array_element_tracking": {
+        "arrays_tracked": 0,
+        "elements_tracked": 0,
+        "details": {},
+        "research": "FSE 2024: Element-Level Precision"
+      }
+    },
+    "tainted_variables": [
+      "bis",
+      "data",
+      "input",
+      "obj",
+      "objStream",
+      "ois"
+    ],
+    "tainted_fields": [],
+    "taint_flows": [
+      {
+        "target": "data",
+        "source": "Heuristic:data",
+        "is_sanitized": false,
+        "implicit_flow": false
+      },
+      {
+        "target": "bis",
+        "source": "Framework:InputStream",
+        "is_sanitized": false,
+        "implicit_flow": false
+      },
+      {
+        "target": "ois",
+        "source": "Framework:InputStream",
+        "is_sanitized": false,
+        "implicit_flow": false
+      },
+      {
+        "target": "input",
+        "source": "Heuristic:input",
+        "is_sanitized": false,
+        "implicit_flow": false
+      },
+      {
+        "target": "objStream",
+        "source": "Framework:InputStream",
+        "is_sanitized": false,
+        "implicit_flow": false
+      },
+      {
+        "target": "obj",
+        "source": "objStream.readObject()",
+        "is_sanitized": false,
+        "implicit_flow": false
+      }
+    ],
+    "alias_analysis": {
+      "variables_tracked": 5,
+      "allocation_sites": 3,
+      "field_accesses": 3,
+      "must_not_alias_pairs": 0,
+      "cache_size": 15,
+      "refinement_iterations": 1,
+      "variable_to_allocation_mappings": 4,
+      "library_summaries_loaded": 12,
+      "object_sensitive_enabled": true
+    },
+    "technical_details": {
+      "cpg_nodes": 147,
+      "cpg_edges": 31,
+      "method_count": 9,
+      "call_count": 13
+    },
+    "input": "/Users/seren3/Downloads/bean_vulnerable_gnn_repo/target_report/VUL009_Deserialization_ObjectInputStream.java",
+    "input_type": "file"
+  }
+]

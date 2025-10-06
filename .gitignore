@@ -1,0 +1,189 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+fresh_bean_test_env/
+.venv/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+bean_vulnerable.log
+analysis.log
+
+# Test Reports and Output Directories
+report*/
+output*/
+evidence*/
+security_report*/
+*_report/
+test_temporal_evidence/
+validate_test/
+improved_graphs/
+fixed_graphs/
+complex_graphs/
+accurate_graphs/
+advanced_correct/
+advanced_final/
+advanced_fixed/
+advanced_taint_test/
+advanced_test/
+alias_test/
+all_methods_test/
+*_test/
+*_correct/
+*_final/
+*_fixed/
+
+# Joern Workspace
+workspace/
+codeql_databases/
+
+# Temporary Files
+*.tmp
+*.bak
+*.swp
+.cache/
+tmp*/
+temp*/
+
+# Generated Graphs
+*.dot
+*.png
+*.svg
+cpg_slice.json
+evidence_spans.json
+
+# Binary Files
+*.bin
+*.class
+*.jar
+*.war
+*.ear
+
+# JSON Test Files (keep sample data, exclude generated)
+results.json
+*_results.json
+metrics_diagnostic_report.json
+enterprise_results.json
+temporal_java_results.json
+
+# Compiled Python
+*.pyc
+*.pyo
+
+# Coverage
+.coverage
+htmlcov/
+.pytest_cache/
+
+# MyPy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pyenv
+.python-version
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath
+*.sage.py
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Spyder
+.spyderproject
+.spyproject
+
+# Rope
+.ropeproject
+
+# mkdocs
+/site
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Thumbnails
+._*
+
+# Files that might appear in the root of a volume
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# Directories potentially created on remote AFP share
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+# Bean Vulnerable Specific
+bean-vuln-enhanced
+comprehensive_graphs.sc
+*.stderr
+*.stdout
+dfg_paths.txt
+dfg_paths.stderr
+
+# Backup files
+*.md.bak
+*_backup/
+bean_vulnerable_backup/
+
+# Test files
+test_quick_taint.java
