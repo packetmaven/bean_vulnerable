@@ -138,7 +138,7 @@ Bean Vulnerable complements but does not replace:
 - **Semgrep** - Pattern-based scanning
 - **Snyk** - Dependency vulnerability scanning
 - **Binarly** - Binary and firmware vulnerability analysis with AI-powered threat detection
-- **3Flatline** - Runtime application security testing (RAST) and behavioral analysis
+- **3Flatline** - source code security testing and vulnerability discovery
 
 ---
 
