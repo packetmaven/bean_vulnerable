@@ -3,7 +3,7 @@
 
 ![Bean Vulnerable ASCII Banner](ascii-art-text.png)
 
-A vulnerability analysis framework with experimental GNN modules; current scoring is heuristic while trained GNN inference is planned.
+A vulnerability analysis framework with experimental GNN modules; heuristic scoring is the default, and trained GNN inference is supported via `--gnn-checkpoint`.
 
 ---
 
@@ -836,6 +836,9 @@ If you want the Spatial GNN to influence confidence scores, you must train and
 pass a checkpoint via `--gnn-checkpoint`.
 
 ```bash
+# 0) (Optional) Download Juliet dataset for real training
+git clone --depth 1 https://github.com/find-sec-bugs/juliet-test-suite.git datasets/juliet-test-suite
+
 # 1) (Optional) Quick smoke training on test samples
 ./venv_bean_311/bin/python analysis/train_spatial_gnn_pipeline.py \
   --input tests/samples \
