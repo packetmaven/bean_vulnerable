@@ -1,7 +1,10 @@
 # src/extensions/aeg_lite.py
 """
 AEG-Lite: Enhanced path-feasibility + patch-diff scorer for Bean Vulnerable
-Provides exploitability analysis and CVSS-like composite scoring
+Provides exploitability analysis and CVSS-like composite scoring.
+
+Status: Prototype binary-analysis module. Java integration and full build
+automation are not wired into the main CLI yet.
 """
 
 import angr
@@ -303,25 +306,6 @@ class AEGLite:
             LOG.error(f"❌ Failed to create mock binary: {e}")
             return False, ""
 
-    def rank_patches(self, patch_commits: List[str], source_dir: str, temp_dir: str) -> List[Tuple[str, bool, int, float]]:
-        """
-        Given a list of commit SHAs, check each out to temp, build, and score.
-        
-        Args:
-            patch_commits: List of commit SHA strings
-            source_dir: Source directory path
-            temp_dir: Temporary directory for builds
-            
-        Returns:
-            Sorted list of (commit, feasibility, path_len, diff_score)
-            Sorted by: feasible first, then lowest diff score
-        """
-        results = []
-        
-        if not patch_commits:
-            LOG.warning("No patch commits provided")
-            return results
-
     def calculate_cvss_like_score(self, feasible: bool, steps: int, diff_score: float) -> float:
         """
         Calculate a CVSS-like composite score from exploitability and patch impact.
@@ -351,70 +335,6 @@ class AEGLite:
         
         LOG.info(f"CVSS-like: exploit={exploit_score:.3f}, impact={impact_score:.3f}, score={cvss_like}")
         return cvss_like
-            
-        # If no git repo, simulate patch analysis
-        if self.repo is None:
-            LOG.info("No git repo available, simulating patch analysis")
-            return self._simulate_patch_ranking(patch_commits, source_dir)
-        
-        original_branch = None
-        try:
-            # Save current branch
-            original_branch = self.repo.active_branch.name
-        except:
-            original_branch = "main"
-        
-        for sha in patch_commits:
-            LOG.info(f"Evaluating patch {sha}")
-            
-            try:
-                # Checkout patch
-                self.repo.git.checkout(sha)
-                
-                # Build binary
-                success, bin_path = self.simulate_build(source_dir)
-                if not success:
-                    LOG.warning(f"Build failed for {sha}")
-                    results.append((sha, False, 0, 1.0))
-                    continue
-                
-                # Load binary and check feasibility
-                if self.load_binary(bin_path):
-                    # Use entry point as target (could be made configurable)
-                    feasible, path_length = self.check_feasibility()
-                else:
-                    feasible, path_length = False, None
-                
-                # Calculate diff score (simplified - compare with main)
-                try:
-                    self.repo.git.checkout('main')
-                    main_file = os.path.join(source_dir, 'vuln.c')
-                    
-                    self.repo.git.checkout(sha)
-                    patch_file = os.path.join(source_dir, 'vuln.c')
-                    
-                    diff_score = self.patch_diff_score(main_file, patch_file)
-                except:
-                    diff_score = 0.5  # Default score if diff fails
-                
-                results.append((sha, feasible, path_length or 0, diff_score))
-                
-            except Exception as e:
-                LOG.error(f"Error evaluating patch {sha}: {e}")
-                results.append((sha, False, 0, 1.0))
-        
-        # Restore original branch
-        try:
-            if original_branch:
-                self.repo.git.checkout(original_branch)
-        except:
-            pass
-        
-        # Sort: feasible first, then lowest diff score
-        sorted_results = sorted(results, key=lambda x: (not x[1], x[3]))
-        
-        LOG.info(f"Patch ranking complete: {len(results)} patches evaluated")
-        return sorted_results
 
     def _simulate_patch_ranking(self, patch_commits: List[str], source_dir: str) -> List[Tuple[str, bool, int, float]]:
         """

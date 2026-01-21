@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Bean Vulnerable GNN Framework - Enhanced CLI with Fixed Edge Extraction
+Bean Vulnerable Framework - Enhanced CLI with Fixed Edge Extraction
 ================================================================
 Comprehensive fix for edge data extraction from analysis results
 """
@@ -23,6 +23,38 @@ import asyncio
 logging.basicConfig(level=logging.INFO)
 LOG = logging.getLogger(__name__)
 
+REPORT_DIR_MARKER = ".bean_vuln_report"
+
+def _is_unsafe_report_dir(report_dir: Path) -> bool:
+    """Block obvious destructive paths."""
+    resolved = report_dir.resolve()
+    unsafe = {Path("/").resolve(), Path.home().resolve(), Path.cwd().resolve()}
+    return resolved in unsafe
+
+def _prepare_report_dir(report_dir: Path) -> Path:
+    """
+    Prepare (and safely reset) report directory using a marker file.
+    Refuses to delete directories without the marker to prevent accidents.
+    """
+    resolved = report_dir.expanduser().resolve()
+    if _is_unsafe_report_dir(resolved):
+        raise ValueError(f"Refusing to use unsafe report directory: {resolved}")
+    if resolved.exists() and resolved.is_symlink():
+        raise ValueError(f"Refusing to use symlinked report directory: {resolved}")
+
+    marker = resolved / REPORT_DIR_MARKER
+    if resolved.exists():
+        if not marker.exists():
+            raise ValueError(
+                f"Refusing to delete existing directory without marker: {resolved}. "
+                f"Create a dedicated report dir or add {REPORT_DIR_MARKER} to allow cleanup."
+            )
+        shutil.rmtree(resolved)
+
+    resolved.mkdir(parents=True, exist_ok=True)
+    marker.write_text("Bean Vulnerable report directory marker.\n", encoding="utf-8")
+    return resolved
+
 # Import the framework
 try:
     from src.core.integrated_gnn_framework import IntegratedGNNFramework
@@ -32,8 +64,16 @@ except ImportError as e:
         from core.integrated_gnn_framework import IntegratedGNNFramework
         from integrations.vul4j_parser import FixedVul4JParser
     except ImportError as e2:
-        print(f"❌ Import error: {e2}")
-        sys.exit(1)
+        # Add parent directory to path for direct script execution
+        parent_dir = Path(__file__).resolve().parent.parent.parent
+        if str(parent_dir) not in sys.path:
+            sys.path.insert(0, str(parent_dir))
+        try:
+            from src.core.integrated_gnn_framework import IntegratedGNNFramework
+            from src.integrations.vul4j_parser import FixedVul4JParser
+        except ImportError as e3:
+            print(f"❌ Import error: {e3}")
+            sys.exit(1)
 
 # Initialize framework
 fw = None  # Will be initialized in main() with CLI flags
@@ -167,7 +207,7 @@ def extract_edge_data_comprehensive(analysis_result: Any) -> Dict[str, int]:
                         break
             
             # Check CPG data
-                cpg_data = analysis_result.get('cpg', {})
+            cpg_data = analysis_result.get('cpg', {})
             if isinstance(cpg_data, dict):
                 if 'edges' in cpg_data:
                     edges = cpg_data['edges']
@@ -243,10 +283,10 @@ def analyze_path(p: Path, recursive: bool, keep: bool, export_dir: Path = None) 
             source_code = p.read_text(encoding='utf-8', errors='ignore')
             
             # Run analysis (analyze_code is synchronous, not async)
-                analysis_result = fw.analyze_code(
-                    source_code=source_code,
-                    source_path=str(p)
-                )
+            analysis_result = fw.analyze_code(
+                source_code=source_code,
+                source_path=str(p)
+            )
             
             # Extract comprehensive metrics
             metrics = extract_edge_data_comprehensive(analysis_result)
@@ -270,7 +310,7 @@ def analyze_path(p: Path, recursive: bool, keep: bool, export_dir: Path = None) 
                     },
                     'processing_time': getattr(analysis_result, 'processing_time', 0.0),
                     'model_version': getattr(analysis_result, 'model_version', '1.0.0'),
-                    'analysis_method': getattr(analysis_result, 'analysis_method', 'integrated_gnn'),
+                    'analysis_method': getattr(analysis_result, 'analysis_method', 'pattern_heuristic_with_uncertainty'),
                     'cpg': {
                         'nodes': metrics['node_count'],
                         'edges': metrics['edge_count'],  # FIXED: Use extracted edge count
@@ -328,8 +368,8 @@ def analyze_path(p: Path, recursive: bool, keep: bool, export_dir: Path = None) 
         return analyze_vul4j_csv(p)
     
     elif p.is_dir():
-            # Directory analysis
-            LOG.info(f"🔍 Analyzing directory: {p}")
+        # Directory analysis
+        LOG.info(f"🔍 Analyzing directory: {p}")
         return analyze_directory(p, recursive)
     
     else:
@@ -393,7 +433,7 @@ def analyze_vul4j_csv(csv_path: Path) -> Dict[str, Any]:
                         'methods': metrics['method_count'],
                         'calls': metrics['call_count']
                     },
-                    'gnn_utilized': getattr(analysis_result, 'gnn_utilized', True),
+                    'gnn_utilized': getattr(analysis_result, 'gnn_utilized', False),
                     'processing_time': getattr(analysis_result, 'processing_time', 0.0),
                     'vuln_info': vuln_info
                 }
@@ -421,11 +461,13 @@ def analyze_vul4j_csv(csv_path: Path) -> Dict[str, Any]:
         processed_count += 1
     
     avg_confidence = sum(r.get('confidence', 0) for r in results) / len(results) if results else 0
+    gnn_used = sum(1 for r in results if r.get('gnn_utilized'))
+    gnn_rate = (gnn_used / len(results)) if results else 0.0
     
     LOG.info(f"   📊 VUL4J Dataset: {len(vul4j_parser.available_vulnerabilities)} total, "
              f"{processed_count} processed, {successful_count} successful")
     LOG.info(f"   📊 Avg Confidence: {avg_confidence:.3f}, Total Nodes: {total_nodes}, "
-             f"Total Edges: {total_edges}, GNN Rate: {100.0}%")
+             f"Total Edges: {total_edges}, GNN Rate: {gnn_rate * 100:.1f}%")
     
     return {
         'dataset_type': 'vul4j_csv',
@@ -438,7 +480,7 @@ def analyze_vul4j_csv(csv_path: Path) -> Dict[str, Any]:
             'average_confidence': avg_confidence,
             'total_nodes': total_nodes,
             'total_edges': total_edges,  # FIXED: Include total edges
-            'gnn_utilization_rate': 1.0
+            'gnn_utilization_rate': gnn_rate
         }
     }
 
@@ -527,12 +569,12 @@ def main():
     """
     ap = argparse.ArgumentParser(
         prog="bean-vuln",
-        description="Bean Vulnerable GNN Framework - Enhanced with Fixed Edge Extraction",
+        description="Bean Vulnerable Framework - Heuristic analysis (GNN modules experimental)",
         formatter_class=argparse.RawTextHelpFormatter
     )
     
-        ap.add_argument("input", nargs="+", 
-                        help="Java files, directories, or VUL4J CSV files to analyze")
+    ap.add_argument("input", nargs="+", 
+                    help="Java files, directories, or VUL4J CSV files to analyze")
     ap.add_argument("-r", "--recursive", action="store_true",
                     help="Scan directories recursively")
     ap.add_argument("-o", "--out", 
@@ -554,11 +596,15 @@ def main():
     ap.add_argument("--keep-workdir", action="store_true",
                     help="Keep temporary directories")
     ap.add_argument("--ensemble", action="store_true",
-                    help="Enable ensemble methods (combines multiple GNN models for improved accuracy)")
+                    help="Enable ensemble methods (experimental; no trained GNN weights yet)")
     ap.add_argument("--advanced-features", action="store_true",
-                    help="Enable advanced feature engineering (GAT + Temporal GNN)")
-    ap.add_argument("--spatial-gnn", action="store_true",
-                    help="Enable spatial GNN with heterogeneous CPG processing (R-GCN + GraphSAGE + Hierarchical Pooling)")
+                    help="Enable advanced feature engineering (experimental; not used in scoring)")
+    ap.add_argument("--spatial-gnn", action="store_true", default=True,
+                    help="Enable spatial GNN inference (default; requires torch + torch-geometric)")
+    ap.add_argument("--no-spatial-gnn", action="store_false", dest="spatial_gnn",
+                    help="Disable spatial GNN inference")
+    ap.add_argument("--gnn-checkpoint",
+                    help="Path to Spatial GNN checkpoint (trained weights for inference)")
     ap.add_argument("--joern-timeout", type=int, default=480, metavar="SECONDS",
                     help="Timeout for Joern operations in seconds (default: 480, use higher values for training data preparation)")
     ap.add_argument("--explain", action="store_true",
@@ -583,16 +629,17 @@ def main():
         enable_advanced_features=args.advanced_features,
         enable_spatial_gnn=args.spatial_gnn,
         enable_explanations=args.explain,
-        joern_timeout=args.joern_timeout
+        joern_timeout=args.joern_timeout,
+        gnn_checkpoint=args.gnn_checkpoint
     )
     
     # Setup HTML report directory
     if args.html_report:
-        report_dir = Path(args.html_report).expanduser()
-        if report_dir.exists():
-            LOG.info(f"🧹 Cleaning report directory: {report_dir}")
-            shutil.rmtree(report_dir)
-        report_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            report_dir = _prepare_report_dir(Path(args.html_report))
+        except ValueError as exc:
+            LOG.error(str(exc))
+            sys.exit(2)
         LOG.info(f"📁 HTML report directory: {report_dir}")
     
     if args.verbose:
@@ -603,7 +650,7 @@ def main():
     if export_dir:
         export_dir.mkdir(parents=True, exist_ok=True)
     
-    print("🎯 Bean Vulnerable GNN Framework - CLI Analysis")
+    print("🎯 Bean Vulnerable Framework - CLI Analysis (GNN + heuristic)")
     print(f"📁 Analyzing {len(args.input)} input(s)...")
     print("=" * 60)
     
@@ -615,7 +662,7 @@ def main():
         
         if not p.exists():
             print(f"❌ Input {i}: {p} not found")
-                continue
+            continue
             
         print(f"🔍 Input {i}: {p}")
                 
@@ -693,24 +740,23 @@ def main():
         cpg_data = result.get('cpg', {})
         node_count = cpg_data.get('nodes', 0)
         edge_count = cpg_data.get('edges', 0)  # FIXED: This should now show real edge count
-            confidence = result.get('confidence', 0.0)
-            vulnerable = result.get('vulnerability_detected', False)
-            # Default to True unless explicitly False to reflect local GNN usage
-            gnn_used = bool(result.get('gnn_utilized', True))
-            
-            if args.summary:
-                vuln_status = "🚨" if vulnerable else "✅"
-                gnn_status = "🧠" if gnn_used else "📊"
-                print(f"   {vuln_status} Nodes: {node_count}, Edges: {edge_count}, "
-                      f"Confidence: {confidence:.3f}, Vulnerable: {vulnerable}, GNN: {gnn_used}")
-            
-            # Add metadata
-            result.update({
-                'input': str(p),
-                'input_type': 'file' if p.is_file() else 'directory'
-            })
-            
-            results.append(result)
+        confidence = result.get('confidence', 0.0)
+        vulnerable = result.get('vulnerability_detected', False)
+        gnn_used = bool(result.get('gnn_utilized', False))
+        
+        if args.summary:
+            vuln_status = "🚨" if vulnerable else "✅"
+            gnn_status = "🧠" if gnn_used else "📊"
+            print(f"   {vuln_status} Nodes: {node_count}, Edges: {edge_count}, "
+                  f"Confidence: {confidence:.3f}, Vulnerable: {vulnerable}, GNN: {gnn_used}")
+        
+        # Add metadata
+        result.update({
+            'input': str(p),
+            'input_type': 'file' if p.is_file() else 'directory'
+        })
+        
+        results.append(result)
     
     total_time = time.time() - start_time
     
@@ -759,7 +805,7 @@ def main():
         print(f"📄 Results saved to: {output_path}")
     else:
         print("📄 JSON Results:")
-            print(json.dumps(output_data, indent=2, default=str))
+        print(json.dumps(output_data, indent=2, default=str))
 
 
 if __name__ == "__main__":

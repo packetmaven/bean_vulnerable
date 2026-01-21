@@ -6,17 +6,31 @@ Basic tests for Bean Vulnerable GNN Framework
 import unittest
 import sys
 import os
+import shutil
+from pathlib import Path
+
+# Avoid NumPy import issues in test environments
+os.environ.setdefault("BEAN_VULN_DISABLE_NUMPY", "1")
 
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from src.core.integrated_gnn_framework import IntegratedGNNFramework, JoernIntegrator, VulnerabilityDetector
+from core.integrated_gnn_framework import IntegratedGNNFramework, JoernIntegrator, VulnerabilityDetector
+
+def _joern_available() -> bool:
+    return (
+        shutil.which("joern") is not None or
+        Path("/usr/local/bin/joern").exists() or
+        Path("/opt/joern/joern-cli/joern").exists()
+    )
 
 
 class TestJoernIntegrator(unittest.TestCase):
     """Test Joern integration"""
     
     def setUp(self):
+        if not _joern_available():
+            self.skipTest("Joern not installed; skipping Joern integration tests.")
         self.integrator = JoernIntegrator()
     
     def test_joern_detection(self):
@@ -79,6 +93,8 @@ class TestIntegratedGNNFramework(unittest.TestCase):
     """Test integrated framework"""
     
     def setUp(self):
+        if not _joern_available():
+            self.skipTest("Joern not installed; skipping integrated framework tests.")
         self.framework = IntegratedGNNFramework()
     
     def test_framework_initialization(self):
@@ -105,7 +121,12 @@ class TestIntegratedGNNFramework(unittest.TestCase):
         self.assertTrue(result['vulnerability_detected'])
         self.assertEqual(result['vulnerability_type'], 'sql_injection')
         self.assertGreater(result['confidence'], 0.5)
+        spatial_meta = result.get('spatial_gnn', {})
         self.assertTrue(result['gnn_utilized'])
+        if spatial_meta.get('weights_loaded'):
+            self.assertTrue(spatial_meta.get('used_in_scoring', False))
+        else:
+            self.assertFalse(spatial_meta.get('used_in_scoring', False))
     
     def test_safe_code_analysis(self):
         """Test analysis of safe code"""

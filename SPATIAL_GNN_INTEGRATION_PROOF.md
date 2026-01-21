@@ -1,7 +1,9 @@
 # Next-Generation Spatial GNN Integration - Complete Proof
 
+> **Note:** This document records initialization/integration work only. The spatial GNN is **not** currently used in the scoring pipeline, and the performance numbers below are **literature claims**, not empirical results from this repo.
+
 ## Executive Summary
-✅ **98.6M parameter next-generation spatial GNN successfully integrated and operational**
+⚠️ **98.6M parameter next-generation spatial GNN integrated for initialization only**
 
 ## Integration Details
 

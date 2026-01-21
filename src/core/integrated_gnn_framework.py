@@ -10,10 +10,9 @@ import json
 import tempfile
 from pathlib import Path
 from typing import Dict, List, Any, Optional
-import numpy as np
+import statistics
 import math
-import torch
-import torch.nn.functional as F
+import random
 from datetime import datetime
 from string import Template
 import re
@@ -25,33 +24,38 @@ import time
 
 TAINT_TRACKING_AVAILABLE = True  # Always available now
 
-# Import CESCL loss components
-try:
-    from .losses.cescl import CESCLTrainer
-    CESCL_AVAILABLE = True
-except ImportError:
-    CESCL_AVAILABLE = False
+CESCL_AVAILABLE = False
+DATASET_MAP_AVAILABLE = False
+CF_EXPLAINER_AVAILABLE = False
+CF_EXPLAINER_CHU_AVAILABLE = False
 
-# Import Dataset-Map components
-try:
-    from .dataset_map import DatasetMapAnalyzer, ActiveLearningStrategy
-    DATASET_MAP_AVAILABLE = True
-except ImportError:
-    DATASET_MAP_AVAILABLE = False
-
-# Import CF-Explainer components
-try:
-    from .cf_explainer import CFExplainerIntegration
-    CF_EXPLAINER_AVAILABLE = True
-except ImportError:
-    CF_EXPLAINER_AVAILABLE = False
-
-# Import research-grade CF-Explainer (Chu et al.)
-try:
-    from .cf_explainer_chu import BeanVulnCFIntegration, CFExplainer
-    CF_EXPLAINER_CHU_AVAILABLE = True
-except ImportError:
-    CF_EXPLAINER_CHU_AVAILABLE = False
+# GNN multiclass label mapping (aligned with prepare_training_data.py)
+GNN_VULN_TYPE_ID_TO_NAME = {
+    0: 'sql_injection',
+    1: 'command_injection',
+    2: 'xss',
+    3: 'path_traversal',
+    4: 'xxe',
+    5: 'ssrf',
+    6: 'deserialization',
+    7: 'ldap_injection',
+    8: 'log_injection',
+    9: 'xpath_injection',
+    10: 'trust_boundary_violation',
+    11: 'reflection_injection',
+    12: 'race_condition',
+    13: 'weak_crypto',
+    14: 'hardcoded_credentials',
+    15: 'insecure_randomness',
+    16: 'null_pointer_dereference',
+    17: 'resource_leak',
+    18: 'buffer_overflow',
+    19: 'integer_overflow',
+    20: 'use_after_free',
+    21: 'double_free',
+    22: 'memory_leak',
+    23: 'none',
+}
 
 class JoernIntegrator:
     """Handles Joern integration for CPG generation"""
@@ -190,6 +194,54 @@ exit
             if "Joern is required" in str(e):
                 raise  # Re-raise dependency errors
             raise RuntimeError(f"Joern integration error: {e}")
+
+    def generate_cpg_structure(self, source_code: str, source_path: Optional[str] = None) -> Dict[str, Any]:
+        """Generate full CPG structure JSON for GNN inference."""
+        if not self.joern_path:
+            raise RuntimeError(
+                "Joern is required for CPG generation. Please install Joern using:\n"
+                "  ./scripts/install_joern.sh\n"
+                "Or ensure Joern is in your PATH and JOERN_PATH environment variable is set."
+            )
+
+        repo_root = Path(__file__).resolve().parents[2]
+        script_path = repo_root / "extract_cpg_for_gnn.sc"
+        if not script_path.exists():
+            raise RuntimeError(f"Missing Joern GNN script: {script_path}")
+
+        temp_source_path = None
+        try:
+            if source_path and Path(source_path).exists():
+                java_path = Path(source_path)
+            else:
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.java', delete=False) as handle:
+                    handle.write(source_code)
+                    temp_source_path = Path(handle.name)
+                java_path = temp_source_path
+
+            with tempfile.TemporaryDirectory() as tmpdir:
+                output_dir = Path(tmpdir)
+                cmd = [
+                    self.joern_path,
+                    "--script", str(script_path),
+                    "--param", f"cpgFile={java_path}",
+                    "--param", f"outputDir={output_dir}",
+                ]
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=self.joern_timeout)
+                if result.returncode != 0:
+                    raise RuntimeError(result.stderr or result.stdout)
+
+                json_path = output_dir / "cpg_structure.json"
+                if not json_path.exists():
+                    raise RuntimeError(f"CPG structure JSON not found at {json_path}")
+
+                return json.loads(json_path.read_text(encoding="utf-8"))
+        finally:
+            if temp_source_path and temp_source_path.exists():
+                try:
+                    temp_source_path.unlink()
+                except Exception:
+                    pass
     
     def _format_cpg_result(self, cpg_data: Dict[str, Any], source_code: str) -> Dict[str, Any]:
         """Format CPG result with additional metadata"""
@@ -311,11 +363,19 @@ class VulnerabilityDetector:
         """Detect SQL injection patterns"""
         sql_keywords = ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'FROM', 'WHERE']
         sql_methods = ['executeQuery', 'execute', 'prepareStatement']
-        
+
         has_sql = any(keyword in code for keyword in sql_keywords)
         has_execution = any(method in code for method in sql_methods)
         has_concatenation = '+' in code and '"' in code
-        
+
+        code_lower = code.lower()
+        uses_prepared = 'preparedstatement' in code_lower or 'preparestatement' in code_lower
+        uses_placeholder = '?' in code
+
+        # Treat parameterized PreparedStatement usage as safe unless concatenation is present
+        if uses_prepared and uses_placeholder and not has_concatenation:
+            return False
+
         return has_sql and has_execution and has_concatenation
     
     def _detect_command_injection(self, code: str) -> bool:
@@ -1012,6 +1072,15 @@ class BayesianUncertaintyLayer:
         self.logger = logging.getLogger(__name__)
         self.dropout_rate = dropout_rate
         self.monte_carlo_samples = monte_carlo_samples
+        self.np = None
+        if os.environ.get("BEAN_VULN_DISABLE_NUMPY") == "1":
+            self.logger.warning("⚠️ NumPy import disabled via BEAN_VULN_DISABLE_NUMPY")
+            return
+        try:
+            import numpy as np  # local import to avoid hard dependency at module load
+            self.np = np
+        except Exception as e:
+            self.logger.warning(f"⚠️ NumPy unavailable; uncertainty metrics degraded: {e}")
     
     def monte_carlo_dropout(self, features: Dict[str, Any], vulnerabilities: List[str]) -> Dict[str, Any]:
         """Apply Monte Carlo dropout for uncertainty estimation"""
@@ -1022,14 +1091,18 @@ class BayesianUncertaintyLayer:
             sample_prediction = self._forward_pass(dropped_features, vulnerabilities)
             predictions.append(sample_prediction)
         
-        predictions_array = np.array(predictions)
-        mean_prediction = np.mean(predictions_array)
-        variance = np.var(predictions_array)
+        if self.np is not None:
+            predictions_array = self.np.array(predictions)
+            mean_prediction = float(self.np.mean(predictions_array))
+            variance = float(self.np.var(predictions_array))
+        else:
+            mean_prediction = sum(predictions) / max(len(predictions), 1)
+            variance = statistics.pvariance(predictions) if len(predictions) > 1 else 0.0
         epistemic_uncertainty = variance
         aleatoric_uncertainty = self._calculate_aleatoric_uncertainty(features, vulnerabilities)
         total_uncertainty = epistemic_uncertainty + aleatoric_uncertainty
         
-        std_dev = np.sqrt(variance)
+        std_dev = math.sqrt(variance)
         confidence_lower = mean_prediction - 1.96 * std_dev
         confidence_upper = mean_prediction + 1.96 * std_dev
         
@@ -1051,13 +1124,14 @@ class BayesianUncertaintyLayer:
         """Apply dropout to features for Monte Carlo sampling"""
         dropped_features = features.copy()
         
-        if np.random.random() < self.dropout_rate:
+        rand = self.np.random.random if self.np is not None else random.random
+        if rand() < self.dropout_rate:
             dropped_features['nodes'] = int(dropped_features.get('nodes', 0) * 0.8)
         
-        if np.random.random() < self.dropout_rate:
+        if rand() < self.dropout_rate:
             dropped_features['methods'] = int(dropped_features.get('methods', 0) * 0.9)
         
-        if np.random.random() < self.dropout_rate:
+        if rand() < self.dropout_rate:
             dropped_features['calls'] = int(dropped_features.get('calls', 0) * 0.85)
         
         return dropped_features
@@ -1070,7 +1144,10 @@ class BayesianUncertaintyLayer:
         method_factor = min(features.get('methods', 0) / 20.0, 0.2)
         call_factor = min(features.get('calls', 0) / 30.0, 0.15)
         pattern_factor = len(vulnerabilities) * 0.15
-        bayesian_noise = np.random.normal(0, 0.05)
+        if self.np is not None:
+            bayesian_noise = float(self.np.random.normal(0, 0.05))
+        else:
+            bayesian_noise = random.gauss(0, 0.05)
         
         prediction = base_confidence + node_factor + method_factor + call_factor + pattern_factor + bayesian_noise
         
@@ -1154,7 +1231,8 @@ class BayesianUncertaintyLayer:
 class IntegratedGNNFramework:
     """Integrated GNN Framework for Vulnerability Detection - NO FALLBACKS"""
     
-    def __init__(self, enable_ensemble=False, enable_advanced_features=False, enable_spatial_gnn=False, enable_explanations=False, joern_timeout=480):
+    def __init__(self, enable_ensemble=False, enable_advanced_features=False, enable_spatial_gnn=True,
+                 enable_explanations=False, joern_timeout=480, gnn_checkpoint: Optional[str] = None):
         self.logger = logging.getLogger(__name__)
         self.logger.info("🚀 Initializing Bean Vulnerable Framework")
         
@@ -1163,6 +1241,10 @@ class IntegratedGNNFramework:
         self.enable_spatial_gnn = enable_spatial_gnn
         self.enable_explanations = enable_explanations
         self.joern_timeout = joern_timeout
+        self.gnn_checkpoint = gnn_checkpoint
+        self.gnn_weights_loaded = False
+        self._gnn_trace_enabled = os.getenv("BEAN_VULN_TRACE_GNN", "").lower() in {"1", "true", "yes", "on"}
+        self._gnn_forward_called = False
         
         # Initialize components
         self.joern_integrator = JoernIntegrator()
@@ -1179,9 +1261,10 @@ class IntegratedGNNFramework:
             self.taint_tracker = None
             self.logger.warning("⚠️ Comprehensive Taint Tracking not available")
         
-        # Initialize Enhanced CF-Explainer
-        if CF_EXPLAINER_AVAILABLE and self.enable_explanations:
+        # Initialize Enhanced CF-Explainer (lazy import)
+        if self.enable_explanations:
             try:
+                from .cf_explainer import CFExplainerIntegration
                 self.cf_explainer = CFExplainerIntegration(self)
                 self.logger.info("✅ Enhanced CF-Explainer initialized")
             except Exception as e:
@@ -1189,10 +1272,7 @@ class IntegratedGNNFramework:
                 self.logger.warning(f"⚠️ CF-Explainer initialization failed: {e}")
         else:
             self.cf_explainer = None
-            if not CF_EXPLAINER_AVAILABLE:
-                self.logger.debug("CF-Explainer not available")
-            elif not self.enable_explanations:
-                self.logger.debug("CF-Explainer disabled (enable with enable_explanations=True)")
+            self.logger.debug("CF-Explainer disabled (enable with enable_explanations=True)")
         
         # Initialize Next-Generation Spatial GNN
         self.spatial_gnn_model = None
@@ -1205,25 +1285,222 @@ class IntegratedGNNFramework:
                         'hidden_dim': 512,
                         'num_layers': 4,
                         'num_attention_heads': 8,
-                        'use_codebert': False,  # Can be enabled for better accuracy
+                        'use_codebert': True,  # CodeBERT embeddings required for this pipeline
                         'use_hierarchical_pooling': True,
                         'enable_attention_visualization': True,
                         'enable_counterfactual_analysis': True
                     }
                     self.spatial_gnn_model = create_spatial_gnn_model(gnn_config)
-                    self.logger.info("✅ Next-Generation Spatial GNN initialized (HGAN4VD + R-GCN + IPAGs)")
-                    self.logger.info(f"   - 98.6M parameters, 82.9% F1 score capability")
+                    self.logger.info("⚠️ Next-Generation Spatial GNN initialized (research config; inference enabled)")
+                    if self.gnn_checkpoint:
+                        self._load_spatial_gnn_checkpoint(self.gnn_checkpoint)
                 else:
                     self.logger.warning("⚠️ PyTorch Geometric not available - Spatial GNN disabled")
             except Exception as e:
                 self.logger.warning(f"⚠️ Spatial GNN initialization failed: {e}")
                 self.spatial_gnn_model = None
+
+        self._enable_gnn_forward_trace()
         
         self.logger.info("✅ Bean Vulnerable Framework initialized")
     
+    def _enable_gnn_forward_trace(self) -> None:
+        if not self._gnn_trace_enabled:
+            return
+        if not self.spatial_gnn_model:
+            self.logger.info("🧠 GNN trace enabled, but spatial GNN is not initialized.")
+            return
+        if getattr(self.spatial_gnn_model, "_beanvuln_gnn_trace_enabled", False):
+            return
+        if hasattr(self.spatial_gnn_model, "register_forward_hook"):
+            def _forward_hook(_module, _inputs, _output):
+                self._gnn_forward_called = True
+                self.logger.info("🧠 Spatial GNN forward hook triggered.")
+            self.spatial_gnn_model.register_forward_hook(_forward_hook)
+            self.spatial_gnn_model._beanvuln_gnn_trace_enabled = True
+            self.logger.info("🧠 GNN forward hook attached.")
+            return
+        if hasattr(self.spatial_gnn_model, "forward"):
+            original_forward = self.spatial_gnn_model.forward
+
+            def _traced_forward(model_self, *args, **kwargs):
+                self._gnn_forward_called = True
+                self.logger.info("🧠 Spatial GNN forward invoked.")
+                return original_forward(*args, **kwargs)
+
+            self.spatial_gnn_model.forward = _traced_forward.__get__(
+                self.spatial_gnn_model, self.spatial_gnn_model.__class__
+            )
+            self.spatial_gnn_model._beanvuln_gnn_trace_enabled = True
+            self.logger.info("🧠 GNN forward wrapper attached.")
+
+    def _load_spatial_gnn_checkpoint(self, checkpoint_path: str) -> None:
+        if not self.spatial_gnn_model:
+            return
+        checkpoint = Path(checkpoint_path)
+        if not checkpoint.exists():
+            self.logger.warning(f"⚠️ Spatial GNN checkpoint not found: {checkpoint}")
+            return
+        try:
+            import torch
+            payload = torch.load(str(checkpoint), map_location="cpu")
+            state_dict = payload.get("model_state_dict", payload) if isinstance(payload, dict) else payload
+            self.spatial_gnn_model.load_state_dict(state_dict)
+            self.gnn_weights_loaded = True
+            self.logger.info(f"✅ Loaded Spatial GNN checkpoint: {checkpoint}")
+        except Exception as exc:
+            self.logger.warning(f"⚠️ Failed to load Spatial GNN checkpoint: {exc}")
+
+    def _cpg_to_pyg_data(self, cpg_structure: Dict[str, Any]) -> Optional[Any]:
+        try:
+            import torch
+            from torch_geometric.data import Data
+        except Exception as exc:
+            self.logger.warning(f"⚠️ PyTorch Geometric unavailable for GNN inference: {exc}")
+            return None
+
+        nodes = cpg_structure.get("nodes") or []
+        edges = cpg_structure.get("edges") or []
+        if not nodes:
+            self.logger.warning("⚠️ Empty CPG nodes; cannot build GNN input.")
+            return None
+
+        node_type_mapping = {
+            'METHOD': 0, 'CALL': 1, 'IDENTIFIER': 2, 'LITERAL': 3,
+            'LOCAL': 4, 'BLOCK': 5, 'CONTROL_STRUCTURE': 6, 'RETURN': 7,
+            'METHOD_PARAMETER_IN': 8, 'FIELD_IDENTIFIER': 9, 'TYPE': 10
+        }
+        category_mapping = {
+            'method': 0, 'call': 1, 'identifier': 2, 'literal': 3,
+            'local': 4, 'block': 5, 'control': 6, 'return': 7,
+            'parameter': 8, 'field': 9, 'type': 10, 'other': 11
+        }
+
+        node_features = []
+        node_tokens = []
+        for node in nodes:
+            code = node.get("code") or node.get("name") or ""
+            if not isinstance(code, str):
+                code = str(code)
+            node_tokens.append(code)
+            features = [
+                float(node_type_mapping.get(node.get("node_type"), 11)) / 12.0,
+                float(category_mapping.get(node.get("category"), 11)) / 12.0,
+                float(node.get("line", 0)) / 1000.0,
+                float(node.get("order", 0)) / 100.0,
+                float(bool(node.get("is_source", False))),
+                float(bool(node.get("is_sink", False))),
+                float(len(code)) / 200.0,
+                float(bool(node.get("name"))),
+                0.0,  # binary label placeholder
+                0.0,  # multiclass label placeholder
+            ]
+            while len(features) < 128:
+                features.append(0.0)
+            node_features.append(features[:128])
+
+        x = torch.tensor(node_features, dtype=torch.float32)
+
+        edge_list = []
+        edge_types = []
+        for edge in edges:
+            try:
+                src = int(edge.get("source", -1))
+                tgt = int(edge.get("target", -1))
+                edge_type_id = int(edge.get("edge_type_id", 2))
+            except Exception:
+                continue
+            if 0 <= src < len(nodes) and 0 <= tgt < len(nodes) and src != tgt:
+                edge_list.append([src, tgt])
+                edge_types.append(edge_type_id)
+
+        if not edge_list:
+            if len(nodes) == 1:
+                edge_list.append([0, 0])
+                edge_types.append(2)
+            else:
+                for i in range(len(nodes) - 1):
+                    edge_list.append([i, i + 1])
+                    edge_types.append(2)
+
+        edge_index = torch.tensor(edge_list, dtype=torch.long).t().contiguous()
+        edge_type = torch.tensor(edge_types, dtype=torch.long)
+        data = Data(x=x, edge_index=edge_index, edge_type=edge_type)
+        data.node_tokens = node_tokens
+        return data
+
+    def _run_spatial_gnn_inference(self, source_code: str, source_path: Optional[str]) -> Optional[Dict[str, Any]]:
+        if not self.spatial_gnn_model:
+            return None
+        try:
+            cpg_structure = self.joern_integrator.generate_cpg_structure(source_code, source_path)
+            data = self._cpg_to_pyg_data(cpg_structure)
+            if data is None:
+                return None
+
+            import torch
+            self.spatial_gnn_model.eval()
+            try:
+                device = next(self.spatial_gnn_model.parameters()).device
+            except StopIteration:
+                device = torch.device("cpu")
+
+            x = data.x.to(device)
+            edge_index = data.edge_index.to(device)
+            edge_type = data.edge_type.to(device)
+
+            node_tokens = getattr(data, "node_tokens", None)
+            with torch.no_grad():
+                outputs = self.spatial_gnn_model(
+                    x, edge_index, edge_type, node_tokens=node_tokens
+                )
+
+            self._gnn_forward_called = True
+
+            gnn_conf = None
+            if isinstance(outputs, dict) and "confidence" in outputs:
+                try:
+                    gnn_conf = float(outputs["confidence"].view(-1)[0].item())
+                except Exception:
+                    gnn_conf = None
+
+            predicted_vuln = False
+            predicted_type = None
+            binary_logits = outputs.get("binary_logits") if isinstance(outputs, dict) else None
+            if binary_logits is not None:
+                pred_class = int(torch.argmax(binary_logits, dim=-1).item())
+                predicted_vuln = pred_class == 1
+
+            multiclass_logits = outputs.get("multiclass_logits") if isinstance(outputs, dict) else None
+            if multiclass_logits is not None:
+                pred_type_id = int(torch.argmax(multiclass_logits, dim=-1).item())
+                predicted_type = GNN_VULN_TYPE_ID_TO_NAME.get(pred_type_id, "unknown_gnn")
+
+            stats = cpg_structure.get("statistics") or {}
+            return {
+                "forward_ok": True,
+                "gnn_confidence": gnn_conf,
+                "predicted_vulnerable": predicted_vuln,
+                "predicted_type": predicted_type,
+                "cpg_stats": {
+                    "num_nodes": stats.get("num_nodes", len(cpg_structure.get("nodes", []))),
+                    "num_edges": stats.get("num_edges", len(cpg_structure.get("edges", []))),
+                },
+            }
+        except Exception as exc:
+            self.logger.warning(f"⚠️ Spatial GNN inference failed: {exc}")
+            return {"forward_ok": False, "error": str(exc)}
+
+    def _combine_confidence(self, heuristic_conf: float, gnn_conf: Optional[float], gnn_trustworthy: bool) -> float:
+        if gnn_conf is None or not gnn_trustworthy:
+            return heuristic_conf
+        return 0.5 * heuristic_conf + 0.5 * gnn_conf
+
     def analyze_code(self, source_code: str, source_path: Optional[str] = None, _internal_call: bool = False) -> Dict[str, Any]:
         """Analyze source code using the complete pipeline with Bayesian uncertainty"""
         self.logger.info("🔍 Starting code analysis...")
+        if self._gnn_trace_enabled:
+            self._gnn_forward_called = False
         
         # Step 1: Generate CPG using Joern
         self.logger.info("📊 Generating CPG...")
@@ -1242,33 +1519,85 @@ class IntegratedGNNFramework:
         self.logger.info("🔍 Detecting vulnerability patterns...")
         vulnerabilities = self.vulnerability_detector.detect_patterns(source_code)
         
-        # Step 3: Process with GNN
-        self.logger.info("🧠 Processing with GNN...")
-        gnn_result = self._actual_gnn_processing(cpg_result, vulnerabilities, source_path)
+        # Step 3: Heuristic scoring with Bayesian uncertainty
+        self.logger.info("🧠 Processing with heuristic scoring...")
+        heuristic_result = self._actual_gnn_processing(
+            cpg_result,
+            vulnerabilities,
+            taint_result=taint_result,
+            source_code=source_code,
+            source_path=source_path,
+        )
+
+        # Step 3.5: Spatial GNN inference (if enabled and initialized)
+        gnn_inference = None
+        if self.spatial_gnn_model:
+            self.logger.info("🧠 Running spatial GNN inference...")
+            gnn_inference = self._run_spatial_gnn_inference(source_code, source_path)
+
+        gnn_forward_ok = bool(gnn_inference and gnn_inference.get("forward_ok"))
+        gnn_confidence = gnn_inference.get("gnn_confidence") if gnn_forward_ok else None
+        gnn_trustworthy = gnn_forward_ok and self.gnn_weights_loaded
+        final_confidence = self._combine_confidence(
+            heuristic_result["confidence"], gnn_confidence, gnn_trustworthy
+        )
+        if gnn_trustworthy:
+            analysis_method = "gnn_inference_with_heuristic"
+        elif gnn_forward_ok:
+            analysis_method = "gnn_inference_untrained"
+        else:
+            analysis_method = "pattern_heuristic_with_uncertainty"
         
         # Step 4: Select primary vulnerability based on severity
         primary_vuln = self._select_primary_vulnerability_by_severity(vulnerabilities, source_code)
         
+        vulnerability_detected = len(vulnerabilities) > 0
+        if gnn_trustworthy and gnn_inference.get("predicted_vulnerable"):
+            vulnerability_detected = True
+
+        if primary_vuln == 'none' and gnn_trustworthy and gnn_inference.get("predicted_vulnerable"):
+            predicted_type = gnn_inference.get("predicted_type")
+            if predicted_type and predicted_type != "none":
+                primary_vuln = predicted_type
+
         final_result = {
-            'vulnerability_detected': len(vulnerabilities) > 0,
+            'vulnerability_detected': vulnerability_detected,
             'vulnerability_type': primary_vuln,
-            'confidence': gnn_result['confidence'],
-            'traditional_confidence': gnn_result['traditional_confidence'],
-            'bayesian_confidence': gnn_result['bayesian_confidence'],
+            'confidence': final_confidence,
+            'heuristic_confidence': heuristic_result['confidence'],
+            'traditional_confidence': heuristic_result['traditional_confidence'],
+            'bayesian_confidence': heuristic_result['bayesian_confidence'],
+            'gnn_confidence': gnn_confidence,
             'vulnerabilities_found': vulnerabilities,
             'cpg': cpg_result['cpg'],
             'joern_available': cpg_result['joern_available'],
-            'gnn_utilized': True,
-            'analysis_method': 'bayesian_integrated_pipeline',
+            'gnn_utilized': gnn_forward_ok,
+            'analysis_method': analysis_method,
             'source_length': len(source_code),
-            'uncertainty_metrics': gnn_result['uncertainty_metrics'],
-            'routing_decision': gnn_result['routing_decision'],
-            'requires_manual_review': gnn_result['routing_decision'].get('requires_attention', False),
-            'graph_sanity': gnn_result.get('graph_sanity', {}),
+            'uncertainty_metrics': heuristic_result['uncertainty_metrics'],
+            'routing_decision': heuristic_result['routing_decision'],
+            'requires_manual_review': heuristic_result['routing_decision'].get('requires_attention', False),
+            'evidence': heuristic_result.get('evidence', {}),
+            'graph_sanity': heuristic_result.get('graph_sanity', {}),
             'taint_tracking': taint_result,
             'input': source_path,  # Add input path for HTML report generation
             'source_code': source_code  # Add source code for CF explainer
         }
+        final_result['gnn_forward_called'] = gnn_forward_ok
+        
+        # Spatial GNN status (initialized but not used in scoring pipeline)
+        final_result['spatial_gnn'] = {
+            'enabled': self.enable_spatial_gnn,
+            'initialized': self.spatial_gnn_model is not None,
+            'used_in_scoring': gnn_trustworthy,
+            'note': 'Spatial GNN inference executed' if gnn_forward_ok else 'Model initialization only; inference not executed',
+            'forward_called': gnn_forward_ok,
+            'weights_loaded': self.gnn_weights_loaded
+        }
+        if self._gnn_trace_enabled:
+            final_result['spatial_gnn']['trace_enabled'] = True
+        if gnn_inference:
+            final_result['spatial_gnn']['inference'] = gnn_inference
         
         # Generate counterfactual explanations if enabled
         if self.cf_explainer and len(vulnerabilities) > 0:
@@ -1332,8 +1661,139 @@ class IntegratedGNNFramework:
         scored_vulns.sort(key=lambda x: x[1], reverse=True)
         return scored_vulns[0][0]
     
-    def _actual_gnn_processing(self, cpg_result: Dict[str, Any], vulnerabilities: List[str], source_path: Optional[str] = None) -> Dict[str, Any]:
-        """GNN processing with Bayesian uncertainty"""
+    def _count_markers(self, code_lower: str, markers: List[str]) -> int:
+        return sum(1 for marker in markers if marker in code_lower)
+
+    def _extract_evidence_signals(self, source_code: str, taint_result: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        code_lower = source_code.lower()
+        taint_flows = int(taint_result.get("taint_flows_count", 0)) if taint_result else 0
+        tainted_vars = int(taint_result.get("tainted_variables_count", 0)) if taint_result else 0
+        sanitized_vars = int(taint_result.get("sanitized_variables_count", 0)) if taint_result else 0
+
+        user_input_markers = [
+            "getparameter(", "getheader(", "getcookies(", "getinputstream(", "getreader(",
+            "httprequest", "httpservletrequest", "servletrequest", "request.getparameter",
+            "request.getheader", "request.getquerystring", "system.in", "readline(", "read(",
+        ]
+        sanitizer_markers = [
+            "preparedstatement", "setstring(", "setint(", "setlong(", "setobject(",
+            "urLEncoder.encode".lower(), "stringescapeutils.escapehtml",
+            "esapi.encoder", "htmlescape", "htmlutils.htmlescape", "encodeforhtml",
+            "encodeforurl", "encodeforjavascript",
+        ]
+        sink_markers = {
+            "sql_injection": ["executequery(", "executeupdate(", "execute(", "preparestatement("],
+            "command_injection": ["runtime.getruntime().exec", "runtime.exec", "processbuilder", "new processbuilder", ".start("],
+            "path_traversal": ["new file(", "fileinputstream(", "filereader(", "files.read", "files.write", "paths.get("],
+            "xss": ["getwriter().print", "getwriter().println", "getwriter().write", "response.getwriter"],
+            "ldap_injection": ["dircontext", "ldap", "search(", "filter"],
+            "xxe": ["documentbuilderfactory", "documentbuilder", "saxparser", "xmlreader", "inputsource"],
+            "deserialization": ["objectinputstream", "readobject", "xmldecoder", "xstream"],
+            "http_response_splitting": ["setheader(", "addheader(", "sendredirect(", "setstatus("],
+            "reflection_injection": ["class.forname", "getmethod", "invoke(", "method.invoke", "newinstance"],
+        }
+
+        weak_crypto_markers = ["md5", "sha1", "des", "rc4", "blowfish", "md4"]
+        insecure_random_markers = ["new random(", "math.random", "random()"]
+        secure_random_markers = ["securerandom"]
+        hardcoded_patterns = [
+            r'password\s*=\s*["\']',
+            r'passwd\s*=\s*["\']',
+            r'api[_-]?key\s*=\s*["\']',
+            r'secret\s*=\s*["\']',
+            r'token\s*=\s*["\']',
+        ]
+
+        user_input_hits = self._count_markers(code_lower, user_input_markers)
+        sanitizer_hits = self._count_markers(code_lower, sanitizer_markers)
+        sink_hits = {key: self._count_markers(code_lower, markers) for key, markers in sink_markers.items()}
+        weak_crypto_hits = self._count_markers(code_lower, weak_crypto_markers)
+        insecure_random_hits = self._count_markers(code_lower, insecure_random_markers)
+        secure_random_hits = self._count_markers(code_lower, secure_random_markers)
+        hardcoded_hits = sum(1 for pattern in hardcoded_patterns if re.search(pattern, source_code, re.IGNORECASE))
+
+        return {
+            "taint_flows": taint_flows,
+            "tainted_variables": tainted_vars,
+            "sanitized_variables": sanitized_vars,
+            "user_input_hits": user_input_hits,
+            "sanitizer_hits": sanitizer_hits,
+            "sink_hits": sink_hits,
+            "weak_crypto_hits": weak_crypto_hits,
+            "insecure_random_hits": insecure_random_hits,
+            "secure_random_hits": secure_random_hits,
+            "hardcoded_hits": hardcoded_hits,
+        }
+
+    def _compute_evidence_adjustment(
+        self,
+        source_code: str,
+        vulnerabilities: List[str],
+        taint_result: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        evidence = self._extract_evidence_signals(source_code, taint_result)
+        if not vulnerabilities:
+            evidence["per_vuln_adjustments"] = {}
+            evidence["evidence_adjustment"] = 0.0
+            return evidence
+
+        injection_types = {
+            "sql_injection",
+            "command_injection",
+            "ldap_injection",
+            "xss",
+            "xxe",
+            "el_injection",
+            "http_response_splitting",
+            "path_traversal",
+            "reflection_injection",
+        }
+
+        per_vuln = {}
+        total_adjustment = 0.0
+        for vuln in vulnerabilities:
+            adjustment = 0.0
+            if vuln in injection_types:
+                if evidence["taint_flows"] > 0:
+                    adjustment += 0.08
+                if evidence["user_input_hits"] > 0:
+                    adjustment += 0.05
+                if evidence["sink_hits"].get(vuln, 0) > 0:
+                    adjustment += 0.05
+                if evidence["sanitized_variables"] > 0 or evidence["sanitizer_hits"] > 0:
+                    adjustment -= min(0.08, 0.02 * max(evidence["sanitized_variables"], 1))
+            elif vuln == "weak_crypto":
+                adjustment += 0.08 if evidence["weak_crypto_hits"] > 0 else -0.04
+            elif vuln == "insecure_randomness":
+                if evidence["insecure_random_hits"] > 0:
+                    adjustment += 0.05
+                if evidence["secure_random_hits"] > 0:
+                    adjustment -= 0.05
+            elif vuln == "deserialization":
+                adjustment += 0.08 if evidence["sink_hits"].get("deserialization", 0) > 0 else -0.03
+            elif vuln == "hardcoded_credentials":
+                adjustment += 0.05 if evidence["hardcoded_hits"] > 0 else -0.02
+            elif evidence["taint_flows"] > 0:
+                adjustment += 0.03
+
+            per_vuln[vuln] = adjustment
+            total_adjustment += adjustment
+
+        total_adjustment = total_adjustment / max(1, len(vulnerabilities))
+        total_adjustment = max(-0.15, min(0.15, total_adjustment))
+        evidence["per_vuln_adjustments"] = per_vuln
+        evidence["evidence_adjustment"] = total_adjustment
+        return evidence
+
+    def _actual_gnn_processing(
+        self,
+        cpg_result: Dict[str, Any],
+        vulnerabilities: List[str],
+        taint_result: Optional[Dict[str, Any]] = None,
+        source_code: Optional[str] = None,
+        source_path: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Heuristic scoring with Bayesian uncertainty (no trained GNN inference)"""
         cpg_data = cpg_result['cpg']
         
         # Traditional confidence
@@ -1341,7 +1801,12 @@ class IntegratedGNNFramework:
         complexity_factor = min(cpg_data.get('nodes', 0) / 100.0, 0.3)
         pattern_factor = len(vulnerabilities) * 0.2
         joern_bonus = 0.1 if cpg_result['joern_available'] else 0.0
-        traditional_confidence = min(base_confidence + complexity_factor + pattern_factor + joern_bonus, 1.0)
+        evidence = self._compute_evidence_adjustment(source_code or "", vulnerabilities, taint_result)
+        evidence_adjustment = evidence.get("evidence_adjustment", 0.0)
+        traditional_confidence = min(
+            max(base_confidence + complexity_factor + pattern_factor + joern_bonus + evidence_adjustment, 0.0),
+            1.0,
+        )
         
         # Bayesian uncertainty analysis
         self.logger.info("🧠 Applying Bayesian uncertainty quantification...")
@@ -1360,6 +1825,7 @@ class IntegratedGNNFramework:
             'bayesian_confidence': bayesian_confidence,
             'uncertainty_metrics': uncertainty_results,
             'routing_decision': routing_results,
+            'evidence': evidence,
             'graph_sanity': {
                 'nodes': cpg_data.get('nodes', 0),
                 'edges': cpg_data.get('edges', 0),

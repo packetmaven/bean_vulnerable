@@ -1,31 +1,19 @@
 """
-Bean Vulnerable - Next-Generation Spatial GNN for Java Vulnerability Detection
-============================================================================
+Bean Vulnerable - Next-Generation Spatial GNN (placeholder)
+==========================================================
 
-This file contains the complete next-generation spatial GNN implementation 
-with research-grade enhancements from 400+ papers (2024-2025).
+This file is a placeholder for a larger experimental implementation.
+It is **not used by default**; the active module is `spatial_gnn_enhanced.py`.
 
-Due to file size, this is saved as spatial_gnn_nextgen.py
-To use: replace spatial_gnn_enhanced.py with this file or import from here.
-
-Research Foundation Integration:
-- HGAN4VD: Heterogeneous Graph Attention Networks (82.9% F1 improvement)
-- VISION: Counterfactual augmentation with GNN interpretability  
+Research inspirations (literature references only; no metrics claimed here):
+- HGAN4VD: Heterogeneous Graph Attention Networks
+- VISION: Counterfactual augmentation + interpretability
 - IPAGs: Inter-Procedural Abstract Graphs
-- Adaptive GNN: Transformer + GCN integration with CodeBERT
+- Adaptive GNN: Transformer + GCN integration
 - R-GCN: Multi-relational vulnerability detection
 - Hierarchical GNN: Multi-scale pattern detection
 
-Key Components:
-1. EnhancedRelationalGCN - R-GCN + HGAN multi-relational processing
-2. InterProceduralAbstractGraph - IPAG compression and enhancement
-3. AdaptiveTransformerGNNFusion - Transformer + GNN with CodeBERT
-4. MultiScaleHierarchicalPooling - Multi-level vulnerability detection
-5. NextGenSpatialGNNVulnerabilityDetector - Complete end-to-end model
-
-Performance: 82.9% F1, 97.8% accuracy with counterfactual augmentation
-
-Version: 4.0.0 (Next-Generation)
+Version: 4.0.0 (Experimental Placeholder)
 """
 
 # NOTE: The complete 2000+ line implementation from the user is ready to be integrated.
