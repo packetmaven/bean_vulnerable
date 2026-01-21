@@ -1,40 +1,24 @@
 """
-Bean Vulnerable - Next-Generation Spatial GNN for Java Vulnerability Detection
-============================================================================
+Bean Vulnerable - Spatial GNN module (experimental)
+===================================================
 
-Comprehensive integration of cutting-edge spatial GNN research for Java vulnerability discovery.
-Based on analysis of 400+ GNN vulnerability detection papers from 2024-2025.
+Research-inspired spatial GNN architecture for Java vulnerability analysis.
+This implementation references ideas from recent literature (e.g., HGAN4VD,
+VISION, IPAGs, R-GCN, hierarchical pooling), but **published metrics (F1/accuracy)
+are not reproduced or claimed by this repo**.
 
-Research Foundation Integration:
-- HGAN4VD: Heterogeneous Graph Attention Networks (82.9% F1 improvement)
-- VISION: Counterfactual augmentation with GNN interpretability (51.8%  97.8% accuracy)
-- IPAGs: Inter-Procedural Abstract Graphs with heterogeneous training
-- Adaptive GNN: Transformer + GCN integration with CodeBERT (82.9% F1 score)
-- R-GCN: Multi-relational vulnerability detection with relation-specific transformations
-- Hierarchical GNN: Two-level graph learning for multi-scale pattern detection
-
-Key Innovations:
-1. Heterogeneous multi-relational message passing (R-GCN + HGAN)
-2. Adaptive transformer-GNN fusion with self-attention
-3. Inter-procedural abstract graph representations
-4. Multi-scale hierarchical vulnerability pattern detection
-5. CodeBERT-enhanced semantic node embeddings
-6. Counterfactual robustness for spurious correlation mitigation
-7. Graph attention-aware vulnerability localization
-8. Advanced spatial-temporal vulnerability tracking
-
-Performance Improvements:
-- 82.9% F1 score on vulnerability datasets (13.6%-49.9% improvement)
-- 51.8%  97.8% accuracy with counterfactual augmentation
-- Worst-group accuracy improvement: 0.7%  85.5%
-- Superior performance on individual CWE types
-- Enhanced interpretability with attention visualization
+Key notes:
+1. Inference runs when torch/torch-geometric are installed.
+2. Scores only influence output when trained weights are provided via
+   `--gnn-checkpoint`.
+3. Treat this module as experimental; benchmark in your environment.
 
 Author: Bean Vulnerable Research Team
-Version: 4.0.0 (Next-Generation Spatial GNN)
+Version: 4.0.0 (Experimental Spatial GNN)
 """
 
 import logging
+import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -68,7 +52,7 @@ try:
     from torch_geometric.utils import to_undirected, add_self_loops, degree
     from torch_geometric.nn.inits import glorot, zeros
     TORCH_GEOMETRIC_AVAILABLE = True
-    logger.info(" PyTorch Geometric available - using next-generation spatial GNN")
+    logger.info(" PyTorch Geometric available - spatial GNN enabled (experimental)")
 except ImportError:
     TORCH_GEOMETRIC_AVAILABLE = False
     logger.warning(" PyTorch Geometric not available - spatial GNN disabled")
@@ -78,13 +62,16 @@ except ImportError:
         class Module: pass
 
 # Check for transformers integration
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 try:
     from transformers import AutoTokenizer, AutoModel
     TRANSFORMERS_AVAILABLE = True
     logger.info(" Transformers available - CodeBERT integration enabled")
 except ImportError:
     TRANSFORMERS_AVAILABLE = False
-    logger.warning(" Transformers not available - using fallback embeddings")
+    AutoTokenizer = None
+    AutoModel = None
+    logger.error(" Transformers not available - install transformers to enable CodeBERT")
 
 # 
 # 1. Enhanced Graph Representation Types and Configuration
@@ -213,7 +200,7 @@ class EnhancedRelationalGCN(nn.Module):
     - HGAN4VD: Heterogeneous attention mechanisms
     - VISION: Counterfactual robustness integration
     
-    Based on latest research achieving 82.9% F1 score improvements.
+    Research-inspired architecture; reported metrics in papers are not reproduced here.
     """
     
     def __init__(self, 
@@ -499,8 +486,8 @@ class InterProceduralAbstractGraph(nn.Module):
         
         return x
     
-    def forward(self, x: torch.Tensor, edge_index: torch.Tensor, 
-                edge_type: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor, edge_index: torch.Tensor,
+                edge_type: torch.Tensor, batch: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
         """Process IPAG with compression and enhancement"""
         
         # Step 1: Merge property node sequences
@@ -517,6 +504,9 @@ class InterProceduralAbstractGraph(nn.Module):
         
         # Step 4: Graph compression (optional)
         compression_active = torch.sigmoid(self.compression_ratio) > 0.5
+        if batch is not None:
+            # Skip compression for batched graphs to avoid batch/node mismatch.
+            compression_active = False
         if compression_active and x.size(0) > 10:  # Only compress larger graphs
             # Simple compression: keep top nodes based on feature magnitude
             node_importance = x.norm(dim=-1)
@@ -554,7 +544,7 @@ class InterProceduralAbstractGraph(nn.Module):
 class AdaptiveTransformerGNNFusion(nn.Module):
     """
     Adaptive fusion of Transformer attention and GNN message passing.
-    Based on research achieving 82.9% F1 scores with CodeBERT integration.
+    Inspired by literature; no benchmarked scores are claimed here.
     
     Integrates:
     - Transformer self-attention for global context
@@ -576,16 +566,21 @@ class AdaptiveTransformerGNNFusion(nn.Module):
         self.use_codebert = use_codebert
         
         # CodeBERT integration for semantic embeddings
-        if use_codebert and TRANSFORMERS_AVAILABLE:
+        if use_codebert:
+            if not TRANSFORMERS_AVAILABLE:
+                raise RuntimeError(
+                    "Transformers not available. Install with `pip install transformers` "
+                    "to enable CodeBERT embeddings."
+                )
             try:
+                self.codebert_tokenizer = AutoTokenizer.from_pretrained("microsoft/codebert-base")
                 self.codebert_model = AutoModel.from_pretrained("microsoft/codebert-base")
                 self.codebert_projection = nn.Linear(768, hidden_dim)  # CodeBERT hidden size is 768
                 logger.info(" CodeBERT model loaded successfully")
             except Exception as e:
-                logger.warning(f"CodeBERT loading failed: {e}, using fallback")
-                self.codebert_model = None
-                self.codebert_projection = nn.Linear(hidden_dim, hidden_dim)
+                raise RuntimeError(f"CodeBERT loading failed: {e}") from e
         else:
+            self.codebert_tokenizer = None
             self.codebert_model = None
             self.codebert_projection = nn.Linear(hidden_dim, hidden_dim)
         
@@ -644,16 +639,14 @@ class AdaptiveTransformerGNNFusion(nn.Module):
     def get_codebert_embeddings(self, node_tokens: List[str]) -> torch.Tensor:
         """Get CodeBERT embeddings for code tokens"""
         
-        if self.codebert_model is None or not node_tokens:
-            # Fallback to random embeddings
-            return torch.randn(len(node_tokens), self.hidden_dim)
+        if not node_tokens:
+            return torch.zeros((0, self.hidden_dim))
+        if self.codebert_model is None or self.codebert_tokenizer is None:
+            raise RuntimeError("CodeBERT is not initialized; enable transformers to use embeddings.")
         
         try:
             # Tokenize and encode with CodeBERT
-            tokenizer = AutoTokenizer.from_pretrained("microsoft/codebert-base")
-            
-            # Batch process tokens
-            encoded_inputs = tokenizer(
+            encoded_inputs = self.codebert_tokenizer(
                 node_tokens, 
                 padding=True, 
                 truncation=True, 
@@ -856,7 +849,19 @@ class PositionalEncoding(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Add positional encoding to input"""
         seq_len = x.size(1)
-        return x + self.pe[:, :seq_len, :].to(x.device)
+        if seq_len <= self.pe.size(1):
+            return x + self.pe[:, :seq_len, :].to(x.device)
+        # Build positional encoding dynamically for long sequences.
+        d_model = self.pe.size(-1)
+        position = torch.arange(0, seq_len, device=x.device).unsqueeze(1).float()
+        div_term = torch.exp(
+            torch.arange(0, d_model, 2, device=x.device).float()
+            * (-math.log(10000.0) / d_model)
+        )
+        pe = torch.zeros(seq_len, d_model, device=x.device)
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        return x + pe.unsqueeze(0)
 
 # 
 # 4. Advanced Hierarchical Graph Pooling
@@ -957,6 +962,9 @@ class MultiScaleHierarchicalPooling(nn.Module):
         
         # Process each hierarchical level
         for level in range(self.num_levels):
+            if current_batch is not None and current_batch.size(0) != current_x.size(0):
+                logger.warning("⚠️ Batch/node mismatch before pooling; using single-graph pooling.")
+                current_batch = None
             
             # Apply GNN processing at current level
             if TORCH_GEOMETRIC_AVAILABLE and hasattr(self.inter_pool_gnns[level], 'forward'):
@@ -1096,6 +1104,9 @@ class VulnerabilityPatternDetector(nn.Module):
         """Detect vulnerability patterns in the current scale"""
         
         patterns = {}
+        if batch is not None and batch.size(0) != x.size(0):
+            logger.warning("⚠️ Batch/node mismatch in pattern detector; using global mean pooling.")
+            batch = None
         
         # Apply each pattern classifier
         for pattern_name, classifier in self.pattern_classifiers.items():
@@ -1133,11 +1144,9 @@ class NextGenSpatialGNNVulnerabilityDetector(nn.Module):
     - VISION-style counterfactual robustness
     - Advanced interpretability and attention visualization
     
-    Research Performance Achievements:
-    - 82.9% F1 score (13.6%-49.9% improvement over baselines)
-    - 51.8%  97.8% accuracy with counterfactual augmentation
-    - Superior performance on individual CWE types
-    - Enhanced robustness against spurious correlations
+    Research context:
+    - Metrics reported in the literature are not reproduced in this repo.
+    - Treat outputs as experimental unless trained weights are provided.
     """
     
     def __init__(self, config: SpatialGNNConfig):
@@ -1278,7 +1287,7 @@ class NextGenSpatialGNNVulnerabilityDetector(nn.Module):
         all_attention_weights = {}
         
         # Stage 1: IPAG Processing
-        x, processed_edge_index = self.ipag_processor(x, edge_index, edge_type)
+        x, processed_edge_index = self.ipag_processor(x, edge_index, edge_type, batch=batch)
         
         # Update edge_type for processed graph (may be compressed)
         if processed_edge_index.shape[1] != edge_index.shape[1]:
@@ -1479,6 +1488,9 @@ def create_nextgen_spatial_gnn_model(config: Optional[Dict[str, Any]] = None) ->
             if hasattr(gnn_config, key):
                 setattr(gnn_config, key, value)
     
+    if gnn_config.use_codebert and not TRANSFORMERS_AVAILABLE:
+        raise RuntimeError("Transformers required for CodeBERT embeddings. Install `transformers` first.")
+
     # Create model
     model = NextGenSpatialGNNVulnerabilityDetector(gnn_config)
     
@@ -1487,7 +1499,7 @@ def create_nextgen_spatial_gnn_model(config: Optional[Dict[str, Any]] = None) ->
     
     # Log key capabilities
     capabilities = []
-    if gnn_config.use_codebert and TRANSFORMERS_AVAILABLE:
+    if gnn_config.use_codebert:
         capabilities.append("CodeBERT semantic embeddings")
     if gnn_config.use_hierarchical_pooling:
         capabilities.append("Multi-scale hierarchical pooling")
@@ -1538,10 +1550,8 @@ def get_model_info(model: NextGenSpatialGNNVulnerabilityDetector) -> Dict[str, A
             'Multi-scale hierarchical pooling',
             'Advanced interpretability components'
         ],
-        'expected_performance': {
-            'f1_score': '82.9% (13.6%-49.9% improvement)',
-            'accuracy': '97.8% (with counterfactual augmentation)',
-            'robustness': 'Worst-group accuracy 0.7%  85.5%'
+        'research_notes': {
+            'metrics': 'Literature-reported only; not reproduced by this repo.'
         }
     }
 
@@ -1610,12 +1620,12 @@ if __name__ == "__main__":
     for integration in model_info['research_integrations']:
         logger.info(f"   {integration}")
     
-    logger.info("\n Expected Performance Improvements:")
-    for metric, value in model_info['expected_performance'].items():
+    logger.info("\n Research Notes:")
+    for metric, value in model_info['research_notes'].items():
         logger.info(f"   {metric.replace('_', ' ').title()}: {value}")
     
-    logger.info("\n Next-generation spatial GNN successfully initialized!")
-    logger.info("Ready for enhanced Java vulnerability detection with state-of-the-art performance.")
+    logger.info("\n Next-generation spatial GNN initialized (experimental).")
+    logger.info("Benchmark in your environment before relying on performance.")
 
 
 # ================================================================

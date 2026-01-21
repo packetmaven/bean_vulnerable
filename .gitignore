@@ -31,6 +31,7 @@ env.bak/
 venv.bak/
 fresh_bean_test_env/
 .venv/
+venv_*/
 
 # IDEs
 .vscode/
@@ -101,6 +102,13 @@ results.json
 metrics_diagnostic_report.json
 enterprise_results.json
 temporal_java_results.json
+analysis/*_results*.json
+analysis/cross_validation_summary*.json
+analysis/seed_*_results.json
+
+# Local datasets and tools (keep out of repo)
+datasets/
+tools/
 
 # Compiled Python
 *.pyc
@@ -187,3 +195,8 @@ bean_vulnerable_backup/
 
 # Test files
 test_quick_taint.java
+
+# Training artifacts
+training_data/
+training_data*/
+checkpoints/

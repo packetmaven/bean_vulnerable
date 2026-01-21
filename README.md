@@ -1,8 +1,9 @@
 # Bean Vulnerable GNN Framework
+> **Status:** Spatial GNN inference runs by default when torch/torch-geometric are installed. For meaningful results, provide trained weights via `--gnn-checkpoint` (or disable with `--no-spatial-gnn`).
 
 ![Bean Vulnerable ASCII Banner](ascii-art-text.png)
 
-A Graph Neural Network framework for vulnerability detection, exploitability assessment, and patch prioritization in Java code using ML techniques.
+A vulnerability analysis framework with experimental GNN modules; current scoring is heuristic while trained GNN inference is planned.
 
 ---
 
@@ -19,7 +20,7 @@ A Graph Neural Network framework for vulnerability detection, exploitability ass
 - [📊 Automatic Graph Generation](#-automatic-graph-generation)
 - [🚀 Enhanced CLI with Hybrid Dynamic Testing](#-enhanced-cli-with-hybrid-dynamic-testing)
 - [🔧 Command Reference](#-command-reference-all-tested--working)
-- [🧠 Spatial GNN for Java Vulnerability Detection](#-spatial-gnn-for-java-vulnerability-detection)
+- [🧠 Spatial GNN Module (Experimental)](#-spatial-gnn-module-experimental)
 - [🚨 Common Dependency Issues](#-common-dependency-issues)
 - [📦 Framework Installation](#-framework-installation)
 - [🔍 Understanding the Output](#-understanding-the-output)
@@ -41,7 +42,8 @@ A Graph Neural Network framework for vulnerability detection, exploitability ass
 The Bean Vulnerable framework combines the following cutting-edge technologies:
 
 - **Joern** for Code Property Graph (CPG) generation
-- **Graph Neural Networks** with advanced loss functions
+- **Graph Neural Network modules** (optional inference; trained weights required for trustworthy results)
+- **Pattern-based detection (current release)** with heuristic scoring; trained GNN inference is planned
 - **CESCL (Cluster-Enhanced Sup-Con Loss)** for improved 0-day discovery
 - **Dataset-Map + Active Learning** for intelligent data quality management
 - **Counterfactual Explainers** for minimal-change security fix recommendations
@@ -309,8 +311,10 @@ When you run `bean-vuln` with the `--html-report` flag, the framework automatica
 
 Bean Vulnerable now includes an **Enhanced CLI** (`bean-vuln2`) that integrates vulnerability detection techniques from research papers:
 
+> **Note:** Hybrid dynamic analysis, RL path prioritization, and property-based testing are **experimental stubs** in this repo. They do not yet integrate real concolic/symbolic engines (JDart/JBSE/JPF‑SPF).
+
 **Key Enhancements:**
-- 🔄 **Hybrid Static-Dynamic Analysis**: Combines GNN with concolic execution
+- 🔄 **Hybrid Static-Dynamic Analysis**: Experimental stub; planned concolic integration (no GNN inference)
 - 🤖 **RL Path Prioritization**: Reinforcement learning-guided symbolic execution
 - 🧪 **Property-Based Testing**: Security invariant validation (inspired by jqwik)
 - 🌊 **Advanced Taint Tracking**: Context-sensitive, path-sensitive, interprocedural
@@ -343,24 +347,26 @@ bean-vuln2 tests/samples/*.java \
 
 When you use the `--comprehensive` flag, you get:
 
-1. ✅ **Static GNN Analysis** (baseline)
-2. ✅ **Hybrid Dynamic Testing** (concolic execution for logic bugs)
-3. ✅ **RL-Guided Path Exploration** (intelligent symbolic execution)
-4. ✅ **Property-Based Testing** (security invariants: auth checks, input validation, SQL injection prevention)
+1. ✅ **Static heuristic analysis** (no trained GNN inference)
+2. ⚠️ **Hybrid Dynamic Testing** (experimental stub; no concolic engine)
+3. ⚠️ **RL-Guided Path Exploration** (experimental stub)
+4. ⚠️ **Property-Based Testing** (experimental stub; no active runner)
 5. ✅ **Ensemble Decision Making** (weighted voting across methods)
 6. ✅ **Advanced Taint Tracking** (implicit flows, context-sensitive, path-sensitive, interprocedural)
 7. ✅ **Full Graph Generation** (CFG, DFG, PDG - auto-enabled for HTML reports)
+
+**Experimental notice:** Hybrid dynamic testing, RL prioritization, and property-based testing are stubs until real engines are integrated.
 
 ### **Enhanced vs Original CLI**
 
 | Feature | Original CLI | Enhanced CLI |
 |---------|-------------|--------------|
-| Static GNN Analysis | ✅ | ✅ |
+| Static heuristic analysis | ✅ | ✅ |
 | Graph Generation | ✅ | ✅ |
 | Taint Tracking | ✅ Basic | ✅ Advanced (5 types) |
-| Hybrid Dynamic | ❌ | ✅ Concolic execution |
-| RL Path Priority | ❌ | ✅ Q-learning |
-| Property Testing | ❌ | ✅ Security invariants |
+| Hybrid Dynamic | ❌ | ⚠️ Experimental stub |
+| RL Path Priority | ❌ | ⚠️ Experimental stub |
+| Property Testing | ❌ | ⚠️ Experimental stub |
 | Ensemble Methods | ✅ Optional | ✅ Built-in |
 | HTML Reports | ✅ | ✅ Enhanced metrics |
 
@@ -407,19 +413,19 @@ bean-vuln path/to/directory/ --recursive --html-report output --summary
 ### **Advanced Features**
 ```bash
 # Scan with ensemble methods (combines multiple detection strategies)
-# Note: Current impact is minimal (~0.05% confidence change) until GNN training is completed
+# Note: Current impact is minimal (~0.05% confidence change) until trained GNN inference is integrated
 bean-vuln file.java --html-report output --ensemble
 
-# Scan with advanced feature engineering (GAT, Temporal GNN)
+# Experimental advanced feature engineering (not used in scoring)
 bean-vuln file.java --html-report output --advanced-features
 
-# Scan with spatial GNN (heterogeneous CPG processing with R-GCN + GraphSAGE)
-bean-vuln file.java --html-report output --spatial-gnn
+# Spatial GNN inference (requires trained checkpoint for accuracy)
+bean-vuln file.java --html-report output
 
 # Scan with counterfactual explanations (minimal code changes to fix vulnerabilities)
 bean-vuln file.java --html-report output --explain
 
-# Comprehensive scan (ensemble + advanced-features + spatial-gnn + explain)
+# Comprehensive scan (ensemble + advanced-features + spatial GNN + explain)
 bean-vuln file.java --html-report output --comprehensive
 ```
 
@@ -470,7 +476,7 @@ bean-vuln tests/samples/VUL022_IntegerOverflow.java --html-report vul022_report 
 bean-vuln tests/samples/ --recursive --summary
 
 # Advanced features with counterfactual explanations
-bean-vuln tests/samples/VUL001_SQLInjection_Basic.java --ensemble --advanced-features --spatial-gnn --explain --summary
+bean-vuln tests/samples/VUL001_SQLInjection_Basic.java --ensemble --advanced-features --explain --summary
 
 # Enhanced CLI with comprehensive analysis (NEW!)
 bean-vuln2 tests/samples/VUL022_IntegerOverflow.java \
@@ -479,13 +485,15 @@ bean-vuln2 tests/samples/VUL022_IntegerOverflow.java \
   --summary
 ```
 
-## 🧠 Spatial GNN for Java Vulnerability Detection
+## 🧠 Spatial GNN Module (Experimental)
 
-Bean Vulnerable now includes a **Spatial GNN** module that provides graph-based vulnerability detection using heterogeneous Code Property Graphs (CPGs).
+Bean Vulnerable includes a **Spatial GNN** module that executes a real GNN forward pass by default when dependencies are present. Heuristic confidence remains the primary score unless trained weights are provided.
 
 ### **What is Spatial GNN?**
 
 Spatial GNNs operate directly on graph topology to capture structural and semantic relationships in code. Unlike temporal GNNs that track changes over time, spatial GNNs analyze the current structure of your codebase.
+
+> **Status:** GNN inference runs by default when dependencies are present. If no checkpoint is provided, the model uses random weights and does **not** influence scoring (heuristic confidence is used).
 
 ### **Key Features**
 
@@ -505,29 +513,43 @@ Spatial GNNs operate directly on graph topology to capture structural and semant
 ### **Usage**
 
 ```bash
-# Enable spatial GNN analysis
-bean-vuln file.java --spatial-gnn --html-report output --summary
+# Spatial GNN inference is enabled by default
+bean-vuln file.java --html-report output --summary
 
-# Combine with other advanced features
-bean-vuln file.java --spatial-gnn --ensemble --advanced-features --html-report output
+# Combine with other advanced features (experimental)
+bean-vuln file.java --ensemble --advanced-features --html-report output
 
-# Comprehensive analysis (includes spatial GNN)
-bean-vuln file.java --comprehensive --html-report output
+# Disable spatial GNN inference if needed
+bean-vuln file.java --no-spatial-gnn --summary
 ```
+
+> **Note:** Provide trained weights for reliable results (and to use GNN scores in confidence):
+> `bean-vuln file.java --gnn-checkpoint /path/to/checkpoint.pt --summary`
 
 ### **Installation Requirements**
 
 The spatial GNN requires PyTorch Geometric:
 
 ```bash
-# Install PyTorch Geometric and dependencies
-pip install torch-geometric
+# Install PyTorch Geometric extensions for torch 2.1.0 (CPU wheels)
+pip install torch-scatter torch-sparse torch-cluster torch-spline-conv \
+  -f https://data.pyg.org/whl/torch-2.1.0+cpu.html
 
-# Or for CPU-only environments
-pip install torch-geometric torch-scatter torch-sparse
+# Then install PyTorch Geometric
+pip install torch-geometric
 ```
 
-For Apple Silicon (M1/M2/M3), PyTorch Geometric will automatically use MPS acceleration.
+CodeBERT embeddings require HuggingFace transformers (torch 2.1-compatible):
+
+```bash
+pip install transformers==4.37.2
+```
+
+The first run will download the `microsoft/codebert-base` model weights.
+
+CodeBERT embeddings are mandatory for GNN inference in this repo (no fallback embeddings are used). Ensure `transformers` is installed.
+
+For Apple Silicon (M1/M2/M3), CPU wheels are available via the PyG wheel index above. If a wheel is missing, fall back to source builds.
 
 ## 🚨 Common Dependency Issues
 
@@ -635,13 +657,20 @@ pip install -e .
 
 ### Final Weighted Confidence
 
-Combines Bayesian and traditional approaches:
+Base heuristic confidence combines Bayesian and traditional approaches:
 
-- **Formula**: `0.7 * Bayesian + 0.3 * Traditional`
+- **Heuristic formula**: `0.7 * Bayesian + 0.3 * Traditional`
+
+When spatial GNN inference runs **and** trained weights are loaded, the final
+confidence blends heuristic + GNN:
+
+- **GNN blend (trained weights only)**: `0.5 * Heuristic + 0.5 * GNN`
 - **0.8+**: High confidence, proceed with remediation
 - **0.6-0.8**: Good confidence, validate findings  
 - **0.4-0.6**: Moderate confidence, manual review recommended
 - **< 0.4**: Low confidence, likely false positive
+
+**Calibration status:** Heuristic only. No empirical calibration set is bundled yet; use uncertainty metrics for manual triage.
 
 **Note:** CESCL loss is available for future GNN training but not currently integrated into the confidence scoring pipeline. See "Future Enhancements" section for planned CESCL integration.
 
@@ -704,16 +733,154 @@ for file in tests/samples/VUL*.java; do
 done
 ```
 
+### Local Dynamic Engine Verification (JPF-SPF / JDart / JBSE)
+These engines require **Java 8** and native Z3 Java bindings.
+
+```bash
+# 1) Use the bundled JDK8 (or set your own JAVA_HOME)
+export JAVA_HOME="$(pwd)/tools/jdks/zulu8.90.0.19-ca-jdk8.0.472-macosx_aarch64/zulu-8.jdk/Contents/Home"
+export PATH="$JAVA_HOME/bin:$PATH"
+
+# 2) Z3 native bindings (built in tools/z3/build)
+export DYLD_LIBRARY_PATH="$(pwd)/tools/z3/build"
+
+# 3) Run a JPF-SPF example (explicit instruction factory required)
+JVM_FLAGS="-Xmx1024m -ea -Djava.library.path=$(pwd)/tools/jpf/jpf-symbc/lib" \
+  ./tools/jpf/jpf-core-symbc/bin/jpf \
+  +symbolic.dp=z3 \
+  +jvm.insn_factory.class=gov.nasa.jpf.symbc.SymbolicInstructionFactory \
+  ./tools/jpf/jpf-symbc/src/tests/gov/nasa/jpf/symbc/ExSymExe.jpf
+
+# 4) Run a JDart example (uses @using = jpf-jdart)
+JVM_FLAGS="-Xmx1024m -ea -Djava.library.path=$(pwd)/tools/z3/build" \
+  ./tools/jpf/jpf-core-symbc/bin/jpf \
+  ./tools/jdart/src/examples/features/simple/using.jpf
+
+# 5) JBSE build (requires Z3 path configured in DecisionProcedureTest.java)
+(cd tools/jbse && ./gradlew build)
+```
+
+Notes:
+- `tools/jpf/site.properties` is used so JPF does **not** require `~/.jpf`.
+  It assumes `bin/jpf` is launched from `tools/jpf/jpf-core-symbc` so
+  `${user.dir}` resolves to the correct paths.
+- `tools/jdart/local.properties` wires jConstraints/Z3 jars for the local build.
+- `tools/z3` includes a small patch for macOS clang compatibility.
+
+### Calibration Evaluation (OWASP Benchmark Java v1.2)
+```bash
+# 1) Download OWASP Benchmark Java dataset
+git clone --depth 1 https://github.com/OWASP-Benchmark/BenchmarkJava.git datasets/benchmarkjava
+
+# 2) Verify the expected file exists
+test -f datasets/benchmarkjava/expectedresults-1.2.csv
+
+# 3) Run a stratified sample calibration run
+./venv_bean_311/bin/python analysis/benchmark_calibration.py --max-per-category 10
+
+# 4) Review metrics and per-category breakdown
+cat analysis/benchmark_calibration_results.json
+```
+Output metrics (ECE/Brier/precision/recall) are written to:
+`analysis/benchmark_calibration_results.json`.
+Dataset is not checked into the repo; each user should download it to
+`datasets/benchmarkjava` as shown above.
+
+### Calibration Evaluation (Juliet Java seed corpus)
+This uses the Juliet test suite mirror and labels files by `_bad` vs `_good*`
+filename suffixes for mapped CWE categories.
+
+```bash
+# 1) Download Juliet test suite mirror
+git clone --depth 1 https://github.com/find-sec-bugs/juliet-test-suite.git datasets/juliet-test-suite
+
+# 2) Verify Juliet testcases directory exists
+test -d datasets/juliet-test-suite/src/testcases
+
+# 3) Run a balanced sample calibration run
+./venv_bean_311/bin/python analysis/juliet_calibration.py --max-per-category 10
+
+# 4) Review metrics and per-category breakdown
+cat analysis/juliet_calibration_results.json
+```
+Output metrics are written to:
+`analysis/juliet_calibration_results.json`.
+Dataset is not checked into the repo; each user should download it to
+`datasets/juliet-test-suite` as shown above. The example uses a GitHub mirror;
+the official Juliet Java 1.3 archive is available from NIST SARD if preferred.
+
+### CLI Seed-Corpus Runner (Deterministic)
+This runs the **CLI** (`bean-vuln`) against a deterministic seed list and writes
+results in the same JSON shape as the calibration scripts.
+
+```bash
+# OWASP Benchmark (deterministic sample)
+./venv_bean_311/bin/python analysis/run_seed_corpus.py \
+  --dataset benchmark \
+  --max-per-category 10 \
+  --output analysis/seed_benchmark_results.json
+
+# Juliet (deterministic sample)
+./venv_bean_311/bin/python analysis/run_seed_corpus.py \
+  --dataset juliet \
+  --max-per-category 10 \
+  --output analysis/seed_juliet_results.json
+```
+
+Notes:
+- Results files are **local only**; do not commit them to the repo.
+- Use `--all` to run all mapped candidates (can take hours).
+
+### GNN Weights (Training + Usage)
+If you want the Spatial GNN to influence confidence scores, you must train and
+pass a checkpoint via `--gnn-checkpoint`.
+
+```bash
+# 1) (Optional) Quick smoke training on test samples
+./venv_bean_311/bin/python analysis/train_spatial_gnn_pipeline.py \
+  --input tests/samples \
+  --data-dir training_data/samples \
+  --checkpoint-dir checkpoints/spatial_gnn/samples \
+  --epochs 2 \
+  --batch-size 4 \
+  --limit 24
+
+# 2) Real training on Juliet (larger, slower)
+./venv_bean_311/bin/python analysis/train_spatial_gnn_pipeline.py \
+  --input datasets/juliet-test-suite/src/testcases \
+  --data-dir training_data/juliet \
+  --checkpoint-dir checkpoints/spatial_gnn/juliet \
+  --epochs 5 \
+  --batch-size 8 \
+  --limit 2000
+
+# 3) Use the trained checkpoint (best_model.pt) for inference
+bean-vuln tests/samples/VUL001_SQLInjection_Basic.java \
+  --gnn-checkpoint checkpoints/spatial_gnn/juliet/best_model.pt \
+  --summary
+```
+
+Notes:
+- The pipeline writes `training_summary.json` in the checkpoint dir with the
+  `best_model_path` field so you can locate the correct file.
+- For meaningful results, increase `--epochs` and remove `--limit` once the
+  quick run is validated.
+
+### Cross-Validation Summary
+```bash
+./venv_bean_311/bin/python analysis/cross_validation_summary.py
+```
+This writes a combined summary to:
+`analysis/cross_validation_summary.json`.
+
 ## 🏗️ Architecture Overview
 
 ```
-Source Code → Joern CPG → Enhanced GNN → Multi-Modal Analysis
-     ↓            ↓              ↓                ↓
-  Java File → 133 Nodes → CESCL+Bayesian → Vuln + Exploit Score
-                                ↓                ↓
-                        Dataset Quality → Risk Assessment
-                                ↓                ↓
-                   CF-Explainers → Security Fix Recommendations
+Source Code → Joern CPG → Heuristic + Optional GNN → Vulnerability Output
+     ↓            ↓                 ↓                      ↓
+  Java File → CPG Metrics → Pattern + GNN Confidence → Risk Assessment
+                                   ↓                      ↓
+                          CF-Explainers → Security Fix Recommendations
 ```
 
 ### Core Components
@@ -724,14 +891,14 @@ Source Code → Joern CPG → Enhanced GNN → Multi-Modal Analysis
 4. **Enhanced CF-Explainer**: AST-aware counterfactual generation 
 5. **ComprehensiveTaintTracker**: Advanced taint analysis with context/path sensitivity 
 6. **EnhancedAliasAnalyzer**: Object-sensitive alias analysis (Tai-e v0.5.1) 
-7. **Spatial GNN**: Heterogeneous CPG processing (R-GCN + GraphSAGE + Hierarchical Pooling) 
+7. **Spatial GNN (optional)**: Inference available when enabled; trained weights required for accuracy
 8. **IntegratedGNNFramework**: Main orchestrator 
 
 ## 📊 Performance Benchmarks
 
-### **Current Detection Performance (Verified October 2025)**
+### **Sample Detection Output (Heuristic)**
 
-Tested on 28 vulnerability samples covering OWASP Top 10 and CWE categories:
+Sample runs on the bundled test corpus (heuristic detection; not statistically calibrated):
 
 | Vulnerability Type | Detection Rate | Avg Confidence | Sample File |
 |-------------------|----------------|----------------|-------------|
@@ -745,11 +912,11 @@ Tested on 28 vulnerability samples covering OWASP Top 10 and CWE categories:
 | HTTP Response Splitting | ✅ 100% | 86.6% | VUL018_HTTPResponseSplitting.java |
 | Integer Overflow | ✅ 100% | 86.7% | VUL022_IntegerOverflow.java |
 
-**Overall Metrics:**
-- **Detection Accuracy**: 100% (9/9 tested types)
-- **Average Confidence**: 86.8%
+**Observed on sample corpus:**
+- **Detection Rate**: 9/9 tested types (heuristic, sample-only)
+- **Average Confidence**: 86.8% (heuristic)
 - **Confidence Range**: 85.1% - 89.6%
-- **False Positives**: ~5-10% (estimated, pattern-based limitations)
+- **False Positives**: ~5-10% (estimated; pattern-based limitations)
 - **Analysis Speed**: ~6 seconds per file (includes graph generation)
 
 ### **Advanced Taint Tracking Performance**
@@ -777,13 +944,13 @@ The following table clearly distinguishes between **currently implemented** feat
 
 | Feature | Current Status | Future Enhancement |
 |---------|---------------|-------------------|
-| **Vulnerability Detection** | ✅ Pattern-based (85-90% accuracy) | 🔮 ML-trained (92-96% projected) |
+| **Vulnerability Detection** | ✅ Pattern-based (heuristic; sample-only) | 🔮 ML-trained (92-96% projected) |
 | **Confidence Scoring** | ✅ 0.7×Bayesian + 0.3×Traditional | 🔮 0.4×CESCL + 0.4×Bayesian + 0.2×Traditional |
 | **Taint Tracking** | ✅ 5 advanced features (implicit, context, path, JNI, interprocedural) | ✅ Fully operational |
 | **Graph Generation** | ✅ Automatic CFG/DFG/PDG per method | ✅ Fully operational |
 | **Joern Integration** | ✅ CPG generation working | ✅ Fully operational |
 | **Bayesian Uncertainty** | ✅ Monte Carlo dropout | ✅ Fully operational |
-| **Spatial GNN** | ✅ R-GCN + GraphSAGE + GAT | ✅ Fully operational |
+| **Spatial GNN** | ⚠️ Optional inference (requires checkpoint) | 🔮 Integrate deeper into scoring pipeline |
 | **Ensemble Methods** | ✅ Working (minimal impact: ~0.05%) | 🔮 Significant impact after GNN training |
 | **CESCL Loss** | ✅ Module available | 🔮 Not yet integrated into pipeline |
 | **Dataset-Map** | ✅ Module available | 🔮 Active learning not yet deployed |
@@ -805,7 +972,29 @@ The following table clearly distinguishes between **currently implemented** feat
 
 ### **GNN Training on Java Vulnerability Datasets**
 
-**Current Status:** Framework uses pre-initialized GNN weights with heuristic-based detection patterns.
+**Current Status:** GNN inference runs when enabled; without trained weights it is not suitable for accuracy claims.
+
+### **Reproducible Training Pipeline**
+Use the built-in pipeline to prepare CPG data and train a compatible checkpoint.
+The default configuration matches the inference model.
+
+```bash
+# Quick smoke-training on bundled samples (limit to 20 files, 2 epochs)
+./venv_bean_311/bin/python analysis/train_spatial_gnn_pipeline.py \
+  --input tests/samples \
+  --limit 20 \
+  --epochs 2 \
+  --checkpoint-dir checkpoints/spatial_gnn
+
+# Use the trained checkpoint for inference
+bean-vuln tests/samples/VUL001_SQLInjection_Basic.java \
+  --gnn-checkpoint checkpoints/spatial_gnn/best_model.pt \
+  --summary
+```
+
+Notes:
+- `training_data/` and `checkpoints/` are local artifacts and not committed.
+- Increase `--epochs` and use real datasets (Juliet/CVEfixes) for meaningful results.
 
 **Current Performance (Pattern-Based Detection):**
 - **Detection Rate**: 85-90% on tested samples (100% on our test suite)

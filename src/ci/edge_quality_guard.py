@@ -98,7 +98,9 @@ class EdgeQualityGuard:
             if 'gnn_utilized' in result:
                 validation['metrics']['gnn_utilized'] = result['gnn_utilized']
                 if not result['gnn_utilized']:
-                    validation['recommendations'].append("Consider enabling GNN analysis for better accuracy")
+                    validation['recommendations'].append(
+                        "Consider enabling GNN inference with trained weights for impact"
+                    )
             
             # Validate uncertainty metrics
             if 'uncertainty_metrics' in result:

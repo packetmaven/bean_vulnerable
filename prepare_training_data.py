@@ -16,13 +16,14 @@ import argparse
 import json
 import logging
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 import subprocess
 import tempfile
 import torch
 from torch_geometric.data import Data, Dataset
 import pickle
 from tqdm import tqdm
+import random
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -220,7 +221,9 @@ def prepare_dataset(
     train_split: float = 0.7,
     val_split: float = 0.15,
     test_split: float = 0.15,
-    timeout: int = 480
+    timeout: int = 480,
+    limit: Optional[int] = None,
+    seed: int = 42,
 ):
     """
     Prepare training dataset from Java files
@@ -235,8 +238,14 @@ def prepare_dataset(
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Find all Java files
-    java_files = list(input_dir.rglob("*.java"))
+    java_files = sorted(input_dir.rglob("*.java"))
     LOG.info(f"Found {len(java_files)} Java files")
+
+    if limit and limit > 0 and len(java_files) > limit:
+        rng = random.Random(seed)
+        rng.shuffle(java_files)
+        java_files = java_files[:limit]
+        LOG.info(f"Using limited sample: {len(java_files)} files (seed={seed})")
     
     if len(java_files) == 0:
         LOG.error("No Java files found!")
@@ -279,8 +288,7 @@ def prepare_dataset(
     LOG.info(f"✅ Successfully processed {len(dataset)} files")
     
     # Split dataset
-    import random
-    random.seed(42)
+    random.seed(seed)
     random.shuffle(dataset)
     
     n = len(dataset)
@@ -329,6 +337,8 @@ def main():
     parser.add_argument("--val-split", type=float, default=0.15, help="Validation set split (default: 0.15)")
     parser.add_argument("--test-split", type=float, default=0.15, help="Test set split (default: 0.15)")
     parser.add_argument("--timeout", type=int, default=480, help="Joern timeout in seconds (default: 480)")
+    parser.add_argument("--limit", type=int, default=0, help="Limit number of Java files (0 = no limit)")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed for sampling and splits")
     
     args = parser.parse_args()
     
@@ -338,7 +348,9 @@ def main():
         train_split=args.train_split,
         val_split=args.val_split,
         test_split=args.test_split,
-        timeout=args.timeout
+        timeout=args.timeout,
+        limit=args.limit if args.limit > 0 else None,
+        seed=args.seed,
     )
 
 

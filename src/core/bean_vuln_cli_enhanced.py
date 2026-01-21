@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 
 """
-Bean Vulnerable GNN Framework - Next-Generation CLI with Hybrid Dynamic Testing Integration
+Bean Vulnerable Framework - Enhanced CLI (experimental stubs)
 ==========================================================================================
 
-Enhanced with JAEX-inspired concolic execution, RL path prioritization, and advanced GNN architectures.
+Experimental stubs for concolic execution, RL path prioritization, and GNN modules; not integrated into scoring.
 Based on analysis of 400+ Java vulnerability discovery research papers (2024-2025).
 
 Key Enhancements:
-- Hybrid concolic execution for logic bug detection
-- Reinforcement learning path exploration  
-- Property-based testing integration
-- Advanced dynamic taint tracking
-- Enhanced GNN with heterogeneous attention
+- Static heuristic analysis baseline (no trained GNN inference)
+- Hybrid concolic execution for logic bug detection (stub)
+- Reinforcement learning path exploration (stub)
+- Property-based testing integration (stub)
+- Advanced dynamic taint tracking (experimental)
+- Spatial GNN module initialization (experimental)
 - Multi-dataset support and evaluation
 Version: 2.0.0 (Enhanced)
 """
@@ -35,10 +36,6 @@ from dataclasses import dataclass
 from enum import Enum
 import logging
 import random
-try:
-    import numpy as np
-except ImportError:
-    np = None
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 import multiprocessing
 
@@ -52,6 +49,38 @@ logging.basicConfig(
     ]
 )
 LOG = logging.getLogger(__name__)
+
+REPORT_DIR_MARKER = ".bean_vuln_report"
+
+def _is_unsafe_report_dir(report_dir: Path) -> bool:
+    """Block obvious destructive paths."""
+    resolved = report_dir.resolve()
+    unsafe = {Path("/").resolve(), Path.home().resolve(), Path.cwd().resolve()}
+    return resolved in unsafe
+
+def _prepare_report_dir(report_dir: Path) -> Path:
+    """
+    Prepare (and safely reset) report directory using a marker file.
+    Refuses to delete directories without the marker to prevent accidents.
+    """
+    resolved = report_dir.expanduser().resolve()
+    if _is_unsafe_report_dir(resolved):
+        raise ValueError(f"Refusing to use unsafe report directory: {resolved}")
+    if resolved.exists() and resolved.is_symlink():
+        raise ValueError(f"Refusing to use symlinked report directory: {resolved}")
+
+    marker = resolved / REPORT_DIR_MARKER
+    if resolved.exists():
+        if not marker.exists():
+            raise ValueError(
+                f"Refusing to delete existing directory without marker: {resolved}. "
+                f"Create a dedicated report dir or add {REPORT_DIR_MARKER} to allow cleanup."
+            )
+        shutil.rmtree(resolved)
+
+    resolved.mkdir(parents=True, exist_ok=True)
+    marker.write_text("Bean Vulnerable report directory marker.\n", encoding="utf-8")
+    return resolved
 
 # Import enhanced framework components
 try:
@@ -397,8 +426,9 @@ def extract_edge_data_comprehensive(analysis_result: Any) -> Dict[str, int]:
 async def analyze_path_enhanced(p: Path, config: AnalysisConfiguration, 
                                fw: Any, hybrid_analyzer: Optional[Any] = None) -> Tuple[VulnerabilityResult, Dict[str, Any]]:
     """
-    Enhanced path analysis with hybrid dynamic testing capabilities.
-    Integrates concolic execution, RL path exploration, and property-based testing.
+    Enhanced path analysis (experimental stub).
+    Hybrid dynamic testing, concolic execution, and RL path exploration are
+    simulated placeholders and do not invoke real engines.
     """
     if not p.exists():
         error_result = VulnerabilityResult(
@@ -421,9 +451,9 @@ async def analyze_path_enhanced(p: Path, config: AnalysisConfiguration,
         results = {}
         detection_methods = []
         
-        # Phase 1: Static GNN Analysis (baseline)
+        # Phase 1: Static heuristic analysis (baseline)
         if config.mode in [AnalysisMode.STATIC_ONLY, AnalysisMode.HYBRID, AnalysisMode.COMPREHENSIVE]:
-            LOG.info("📊 Running static GNN analysis...")
+            LOG.info("📊 Running static heuristic analysis (no trained GNN inference)...")
             if p.suffix == ".java":
                 source_code = p.read_text(encoding='utf-8', errors='ignore')
                 static_result = fw.analyze_code(source_code=source_code, source_path=str(p))
@@ -431,8 +461,8 @@ async def analyze_path_enhanced(p: Path, config: AnalysisConfiguration,
                 LOG.debug(f"Vulnerability detected: {static_result.get('vulnerability_detected', 'N/A')}")
                 LOG.debug(f"Confidence: {static_result.get('confidence', 'N/A')}")
                 LOG.debug(f"Type: {static_result.get('vulnerability_type', 'N/A')}")
-                results['static_gnn'] = static_result  # Use consistent key name
-                detection_methods.append("static_gnn")
+                results['static_heuristic'] = static_result
+                detection_methods.append("static_heuristic")
         
         # Phase 2: Hybrid Dynamic Analysis
         if hybrid_analyzer and config.mode in [AnalysisMode.HYBRID, AnalysisMode.COMPREHENSIVE]:
@@ -477,13 +507,13 @@ async def analyze_path_enhanced(p: Path, config: AnalysisConfiguration,
         LOG.info(f"✅ Final result: vuln={final_result.vulnerability_detected}, conf={final_result.confidence:.3f}")
         
         # Extract enhanced metrics
-        enhanced_metrics = extract_edge_data_comprehensive(results.get('static_gnn', {}))
+        enhanced_metrics = extract_edge_data_comprehensive(results.get('static_heuristic', {}))
         final_result.graph_metrics = enhanced_metrics
         
         LOG.info(f"✅ Enhanced analysis completed in {final_result.analysis_time:.2f}s")
         
         # Return both the enhanced result and the original framework result for HTML report
-        original_framework_result = results.get('static_gnn', {})
+        original_framework_result = results.get('static_heuristic', {})
         return final_result, original_framework_result
         
     except Exception as e:
@@ -509,7 +539,7 @@ def consolidate_analysis_results(results: Dict[str, Any], methods: List[str]) ->
     
     # Method confidence weights based on research effectiveness
     method_weights = {
-        'static_gnn': 1.0,  # Use full weight for static analysis when it's the only method
+        'static_heuristic': 1.0,  # Use full weight for static analysis when it's the only method
         'hybrid_dynamic': 0.4, 
         'property_based': 0.2,
         'rl_guided': 0.1
@@ -601,13 +631,14 @@ def initialize_framework(args) -> Tuple[Any, Optional[Any]]:
     """Initialize the enhanced framework with configuration-based component loading"""
     
     try:
-        # Initialize core GNN framework
+        # Initialize core analysis framework
         fw = IntegratedGNNFramework(
             enable_ensemble=args.ensemble or args.comprehensive,
             enable_advanced_features=args.advanced_features or args.comprehensive,
             enable_spatial_gnn=args.spatial_gnn or args.comprehensive,
             enable_explanations=args.explain or args.comprehensive,
-            joern_timeout=args.joern_timeout
+            joern_timeout=args.joern_timeout,
+            gnn_checkpoint=args.gnn_checkpoint
         )
         
         # Initialize hybrid analyzer if advanced features are enabled
@@ -624,7 +655,7 @@ def initialize_framework(args) -> Tuple[Any, Optional[Any]]:
                         }
                 
                 hybrid_analyzer = MockHybridAnalyzer()
-                LOG.info("✅ Hybrid analyzer initialized")
+                LOG.warning("⚠️ Hybrid analyzer initialized (experimental stub, no real engine)")
             except Exception as e:
                 LOG.warning(f"Hybrid analyzer initialization failed: {e}")
                 hybrid_analyzer = None
@@ -693,7 +724,7 @@ def main():
     # Enhanced argument parser with new research-based options
     ap = argparse.ArgumentParser(
         prog="bean-vuln-enhanced",
-        description="Bean Vulnerable GNN Framework - Enhanced with Hybrid Dynamic Testing (v2.0)",
+        description="Bean Vulnerable Framework - Enhanced CLI (experimental features)",
         formatter_class=argparse.RawTextHelpFormatter
     )
     
@@ -711,15 +742,15 @@ def main():
     
     # Enhanced analysis options (research-based)
     ap.add_argument("--hybrid-analysis", action="store_true",
-                   help="Enable hybrid static-dynamic analysis with concolic execution")
+                   help="Enable hybrid analysis (experimental stub; no real engines)")
     ap.add_argument("--rl-prioritization", action="store_true", 
-                   help="Enable reinforcement learning path prioritization")
+                   help="Enable RL path prioritization (experimental stub)")
     ap.add_argument("--property-testing", action="store_true",
-                   help="Enable property-based testing for security invariants")
+                   help="Enable property-based testing (experimental stub)")
     ap.add_argument("--taint-tracking", action="store_true",
                    help="Enable advanced dynamic taint tracking")
     ap.add_argument("--ensemble-gnn", action="store_true",
-                   help="Enable ensemble GNN with multiple architectures")
+                   help="Enable ensemble mode (experimental; no trained GNN inference)")
     
     # Performance and resource options
     ap.add_argument("--max-depth", type=int, default=50,
@@ -740,7 +771,12 @@ def main():
     # Legacy compatibility options
     ap.add_argument("--ensemble", action="store_true", help="Enable ensemble methods")
     ap.add_argument("--advanced-features", action="store_true", help="Enable advanced features")
-    ap.add_argument("--spatial-gnn", action="store_true", help="Enable spatial GNN")
+    ap.add_argument("--spatial-gnn", action="store_true", default=True,
+                    help="Enable spatial GNN inference (default; requires torch + torch-geometric)")
+    ap.add_argument("--no-spatial-gnn", action="store_false", dest="spatial_gnn",
+                    help="Disable spatial GNN inference")
+    ap.add_argument("--gnn-checkpoint",
+                    help="Path to Spatial GNN checkpoint (trained weights for inference)")
     ap.add_argument("--explain", action="store_true", help="Generate explanations")
     ap.add_argument("--comprehensive", action="store_true", 
                    help="Enable all advanced features (hybrid + RL + property testing)")
@@ -765,6 +801,12 @@ def main():
         args.advanced_features = True
         args.spatial_gnn = True
         args.explain = True
+
+    if args.hybrid_analysis or args.rl_prioritization or args.property_testing or args.taint_tracking:
+        LOG.warning(
+            "⚠️ Experimental features enabled: hybrid/RL/property testing are stubs and "
+            "do not run real dynamic or symbolic engines yet."
+        )
     
     # Create analysis configuration
     config = AnalysisConfiguration(
@@ -937,12 +979,11 @@ def main():
     
     # Generate graphs using Joern comprehensive script
     if args.html_report and (args.export_dfg or args.export_cfg or args.export_pdg) and args.input:
-        report_dir = Path(args.html_report).expanduser()
-        # Clean existing report directory BEFORE generating graphs
-        if report_dir.exists():
-            LOG.info(f"🧹 Cleaning existing report directory: {report_dir}")
-            shutil.rmtree(report_dir)
-        report_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            report_dir = _prepare_report_dir(Path(args.html_report))
+        except ValueError as exc:
+            LOG.error(str(exc))
+            sys.exit(2)
         
         # Get source file path
         source_path = Path(args.input[0]).expanduser().resolve()

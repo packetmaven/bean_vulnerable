@@ -20,9 +20,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.data import DataLoader
 from pathlib import Path
-import json
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional
 import numpy as np
 from tqdm import tqdm
 import random
@@ -33,7 +32,6 @@ from .spatial_gnn_enhanced import create_spatial_gnn_model, TORCH_GEOMETRIC_AVAI
 if not TORCH_GEOMETRIC_AVAILABLE:
     raise ImportError("PyTorch Geometric is required for training. Install with: pip install torch-geometric torch-scatter torch-sparse")
 
-from torch_geometric.data import Data
 
 
 class SpatialGNNTrainer:
@@ -69,11 +67,15 @@ class SpatialGNNTrainer:
         if model_config is None:
             model_config = {
                 'node_dim': 128,
-                'hidden_dim': 256,
+                'hidden_dim': 512,
                 'num_vulnerability_types': 24,
-                'num_edge_types': 4,
-                'num_layers': 3,
-                'use_hierarchical': True
+                'num_edge_types': 13,
+                'num_layers': 4,
+                'num_attention_heads': 8,
+                'use_codebert': True,
+                'use_hierarchical_pooling': True,
+                'enable_attention_visualization': True,
+                'enable_counterfactual_analysis': True,
             }
         
         # Create model
@@ -155,6 +157,8 @@ class SpatialGNNTrainer:
             CESCL loss scalar
         """
         batch_size = embeddings.shape[0]
+        if batch_size < 2:
+            return torch.tensor(0.0, device=embeddings.device)
         
         # Normalize embeddings
         embeddings = F.normalize(embeddings, p=2, dim=1)
@@ -191,6 +195,9 @@ class SpatialGNNTrainer:
         
         # Combine losses
         total_loss = contrastive_loss + self.cescl_cluster_weight * cluster_loss
+        if not torch.isfinite(total_loss):
+            self.logger.warning("⚠️ CESCL loss non-finite; skipping for this batch.")
+            return torch.tensor(0.0, device=embeddings.device)
         
         return total_loss
     
@@ -253,6 +260,8 @@ class SpatialGNNTrainer:
     def validate(self, val_loader: DataLoader) -> Dict[str, float]:
         """Validate the model"""
         self.model.eval()
+        if len(val_loader) == 0:
+            return {'loss': 0.0, 'binary_accuracy': 0.0, 'multiclass_accuracy': 0.0}
         
         total_loss = 0.0
         correct_binary = 0
@@ -349,7 +358,15 @@ class SpatialGNNTrainer:
                            f"CESCL: {train_metrics['cescl_loss']:.4f})")
             
             # Validate
-            val_metrics = self.validate(val_loader)
+            if len(val_loader) == 0:
+                self.logger.warning("⚠️ Validation set empty; using training loss for checkpointing.")
+                val_metrics = {
+                    'loss': train_metrics['loss'],
+                    'binary_accuracy': 0.0,
+                    'multiclass_accuracy': 0.0,
+                }
+            else:
+                val_metrics = self.validate(val_loader)
             self.logger.info(f"   Val Loss: {val_metrics['loss']:.4f}, "
                            f"Binary Acc: {val_metrics['binary_accuracy']:.4f}, "
                            f"Multiclass Acc: {val_metrics['multiclass_accuracy']:.4f}")
@@ -367,7 +384,7 @@ class SpatialGNNTrainer:
                 self.best_model_path = checkpoint_dir / "best_model.pt"
                 self.save_checkpoint(self.best_model_path, epoch+1, {**train_metrics, **val_metrics})
                 self.patience_counter = 0
-                self.logger.info(f"   ✅ New best model saved!")
+                self.logger.info("   ✅ New best model saved!")
             else:
                 self.patience_counter += 1
                 if self.patience_counter >= self.early_stopping_patience:

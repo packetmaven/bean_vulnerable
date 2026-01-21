@@ -4,11 +4,14 @@
 
 A Graph Neural Network framework for vulnerability detection, exploitability assessment, and patch prioritization in Java code using ML techniques.
 
+> **Status:** Spatial GNN inference runs by default when dependencies are present; GNN scores influence confidence only when a trained checkpoint is provided via `--gnn-checkpoint` (or disable with `--no-spatial-gnn`). Hybrid dynamic testing and RL path prioritization are **not integrated** yet. For the most accurate description of current capabilities, see the root `README.md`.
+
 ## 🎯 Overview
 
 The Bean Vulnerable framework combines the following cutting-edge technologies:
 - **Joern** for Code Property Graph (CPG) generation
 - **Graph Neural Networks** with advanced loss functions
+- **Pattern-based detection (current release)** with heuristic scoring; trained GNN inference is planned
 - **CESCL (Cluster-Enhanced Sup-Con Loss)** for improved 0-day discovery
 - **Dataset-Map + Active Learning** for intelligent data quality management
 - **AEG Lite** for exploitability assessment and patch ranking
@@ -17,47 +20,29 @@ The Bean Vulnerable framework combines the following cutting-edge technologies:
 - **CVSS-like Scoring** for standardized risk assessment
 - **CI Quality Guard** for production deployment safety
 
-## ✅ **VERIFIED WORKING: Mac Silicon Complete Setup**
+## ⚠️ **Prototype Setup Notes (Mac Silicon)**
 
-### 🎉 **Installation Success Confirmed**
-
-The Bean Vulnerable Framework is **fully operational** on Mac Silicon (M1/M2/M3/M4) with the following dependencies:
-
-- ✅ **Python 3.11.13** with virtual environment
-- ✅ **PyTorch 2.1.0** with MPS (Metal Performance Shaders) GPU acceleration
-- ✅ **DGL 2.1.0** with complete GraphBolt support
-- ✅ **angr 9.2.166** for AEG Lite binary analysis
-- ✅ **All core dependencies** (NetworkX, scikit-learn, transformers, etc.)
-- ✅ **Framework initialization** successful ("✅ AEG lite extension loaded successfully")
-- ✅ **Vulnerability detection** tested on 24 sample files
-- ✅ **Advanced features** (ensemble, GAT, temporal GNN, counterfactual explanations)
-
-### 🚀 **Quick Start (Tested & Working)**
+### 🚀 **Quick Start**
 
 ```bash
 # 1. Use Python 3.11 (critical for DGL compatibility)
 python3.11 -m venv venv_bean_311
 source venv_bean_311/bin/activate
 
-# 2. Run our comprehensive Mac Silicon setup script
-./fix_dgl_mac_silicon.sh
+# 2. Install dependencies (CPU wheels shown)
+pip install --upgrade pip setuptools wheel
+pip install torch==2.1.0 torchvision==0.16.0 torchaudio==2.1.0 --index-url https://download.pytorch.org/whl/cpu
+pip install torchdata==0.7.0
+pip install dgl==2.1.0 -f https://data.dgl.ai/wheels/torch-2.1/repo.html
+pip install -r requirements.txt
+pip install transformers==4.37.2
+pip install -e .
 
-# 3. Install Joern
-./scripts/install_joern.sh
-
-# 4. Verify installation (Simple method - avoids shell quote issues)
+# 3. Verify installation
 python verify_installation.py
 
-# Alternative single-line verification
-python -c "from src.core.integrated_gnn_framework import IntegratedGNNFramework; print('✅ Bean Vulnerable Framework ready!')"
-
-# 5. Test with sample file
-python bean_vuln_cli.py tests/samples/VUL001_SQLInjection_Basic.java --summary
-```
-
-> **💡 Note**: We've fixed the shell quote issues (`dquote>` problems) by providing a dedicated verification script and simplified command syntax.
-
-**Expected Output:**
+# 4. Test with sample file
+bean-vuln tests/samples/VUL001_SQLInjection_Basic.java --summary
 ```
 
 ## 🔧 Advanced Mac Silicon Setup & Usage (Latest)
@@ -91,6 +76,11 @@ Torch-Geometric (CPU wheels matching torch 2.1.0):
   -f https://data.pyg.org/whl/torch-2.1.0+cpu.html
 ```
 
+CodeBERT embeddings require transformers (torch 2.1 compatible):
+```bash
+pip install transformers==4.37.2
+```
+
 ### Quick verification
 ```bash
 /Users/<your-username>/src/github.com/your-org/bean_vulnerable_gnn_repo/fresh_bean_test_env/bin/python -c 'import torch, torchdata, dgl; print("OK", torch.__version__, torchdata.__version__, dgl.__version__)'
@@ -110,9 +100,12 @@ Reload shell:
 ```
 
 ### Advanced runtime options (robustness, proof, calibration)
-- Single-file run with all features enabled:
+
+> **Note:** The flags shown below are **not implemented** in the current CLI. Use `bean-vuln --help` to see supported options.
+
+- Single-file run with supported flags:
 ```bash
-/Users/<your-username>/src/github.com/your-org/bean_vulnerable_gnn_repo/fresh_bean_test_env/bin/bean-vuln --debug --summary --seed 123 --robust 5 --proof --evidence-output '/tmp/bean_proof' --calibrate-temp 1.5 --json-output '/tmp/bean_one.json' '/Users/<your-username>/src/github.com/your-org/bean_vulnerable_gnn_repo/tests/real_world_samples/RealWorld_CommandInjection_FileProcessor.java'
+/Users/<your-username>/src/github.com/your-org/bean_vulnerable_gnn_repo/fresh_bean_test_env/bin/bean-vuln --summary --out '/tmp/bean_one.json' '/Users/<your-username>/src/github.com/your-org/bean_vulnerable_gnn_repo/tests/samples/VUL003_CommandInjection_Runtime.java'
 ```
 
 - Inspect calibrated confidence, robust consensus, DFG metric, and graph sanity in JSON:
@@ -131,12 +124,9 @@ Reload shell:
 ```
 
 ### Apple Silicon optimizations (optional)
-Load environment tweaks if you generated `mac_silicon_env.sh` via the fix script:
-```bash
-source '/Users/<your-username>/src/github.com/your-org/bean_vulnerable_gnn_repo/mac_silicon_env.sh'
-```
+Environment tweaks are not shipped in this repo. Use standard Python/MPS settings and consult PyTorch docs if needed.
 
-- Directory summary (aggregates per-file; `GNN:True` if any file used the GNN):
+- Directory summary (aggregates per-file; `heuristic:True` if any file triggered pattern detection):
 ```bash
 /Users/<your-username>/src/github.com/your-org/bean_vulnerable_gnn_repo/fresh_bean_test_env/bin/bean-vuln --summary '/Users/<your-username>/src/github.com/your-org/bean_vulnerable_gnn_repo/tests/samples'
 ```
@@ -150,7 +140,7 @@ hash -r
 ```
 Module form:
 ```bash
-/Users/<your-username>/src/github.com/your-org/bean_vulnerable_gnn_repo/fresh_bean_test_env/bin/python '/Users/<your-username>/src/github.com/your-org/bean_vulnerable_gnn_repo/bean_vuln_cli.py' --debug --summary --seed 123 --robust 5 --proof --evidence-output '/tmp/bean_proof' --calibrate-temp 1.5 --json-output '/tmp/bean_one.json' '/Users/<your-username>/src/github.com/your-org/bean_vulnerable_gnn_repo/tests/real_world_samples/RealWorld_CommandInjection_FileProcessor.java'
+/Users/<your-username>/src/github.com/your-org/bean_vulnerable_gnn_repo/fresh_bean_test_env/bin/python '/Users/<your-username>/src/github.com/your-org/bean_vulnerable_gnn_repo/src/core/bean_vuln_cli.py' --summary --out '/tmp/bean_one.json' '/Users/<your-username>/src/github.com/your-org/bean_vulnerable_gnn_repo/tests/samples/VUL003_CommandInjection_Runtime.java'
 ```
 
 ### Notes & Tips
@@ -163,87 +153,76 @@ Module form:
 - ⚡ AEG Analysis: Exploitability Score: 0.400, Confidence: 0.500
 ```
 
-## 🔧 **Command Reference (All Tested & Working)**
+## 🔧 **Command Reference (Supported)**
 
 ### **Basic File Analysis**
 ```bash
 # Scan a single Java file
-python bean_vuln_cli.py path/to/file.java
+bean-vuln path/to/file.java
 
 # Scan with summary output  
-python bean_vuln_cli.py path/to/file.java --summary
+bean-vuln path/to/file.java --summary
 
 # Scan multiple specific files
-python bean_vuln_cli.py file1.java file2.java file3.java
+bean-vuln file1.java file2.java file3.java
 ```
 
 ### **Directory Scanning**
 ```bash
 # Scan all Java files in a directory
-python bean_vuln_cli.py --directory path/to/directory
+bean-vuln path/to/directory
 
 # Recursive directory scan
-python bean_vuln_cli.py --directory path/to/directory --recursive
+bean-vuln path/to/directory --recursive
 
 # Alternative syntax for directory scanning
-python bean_vuln_cli.py path/to/directory/ --recursive
+bean-vuln path/to/directory/ --recursive
 ```
 
-### **Advanced Features (All Working)**
+### **Advanced Features (Experimental / Partial)**
+> Some advanced flags enable experimental or stubbed functionality; check `bean-vuln --help` for current support.
 ```bash
 # Scan with ensemble methods (improved accuracy)
-python bean_vuln_cli.py file.java --ensemble
+bean-vuln file.java --ensemble
 
-# Scan with advanced feature engineering (GAT, Temporal GNN)
-python bean_vuln_cli.py file.java --advanced-features
+# Experimental feature engineering (not used in scoring)
+bean-vuln file.java --advanced-features
 
 # Scan with counterfactual explanations (AST-aware)
-python bean_vuln_cli.py file.java --explain
+bean-vuln file.java --explain
 
 # Comprehensive scan (all features)
-python bean_vuln_cli.py file.java --comprehensive
+bean-vuln file.java --comprehensive
 ```
 
-### **AEG Lite Features (Fully Operational)**
-```bash
-# Basic exploitability analysis
-python bean_vuln_cli.py file.java --aeg
-
-# Enhanced AEG analysis with patch ranking
-python bean_vuln_cli.py --aeg-lite --patches commit1 commit2 commit3
-
-# Full AEG analysis with binary support
-python bean_vuln_cli.py file.java --aeg-lite --binary-path compiled.jar
-```
+### **AEG Lite (Prototype)**
+AEG Lite is a prototype binary-analysis module and is **not exposed in the CLI** yet.
 
 ### **Output and Reporting**
 ```bash
 # Save results to JSON file
-python bean_vuln_cli.py file.java --json-output report.json
+bean-vuln file.java --out report.json
 
 # Enable verbose logging
-python bean_vuln_cli.py file.java --verbose
-
-# Debug mode
-python bean_vuln_cli.py file.java --debug
+bean-vuln file.java --verbose
 ```
 
-### **Tested Examples (From Our Verification)**
+### **Example Runs**
 ```bash
 # Single file scan (SQL Injection - 69.3% confidence)
-python bean_vuln_cli.py tests/samples/VUL001_SQLInjection_Basic.java --summary
+bean-vuln tests/samples/VUL001_SQLInjection_Basic.java --summary
 
 # Command Injection detection (Working)
-python bean_vuln_cli.py tests/samples/VUL003_CommandInjection_Runtime.java --summary
+bean-vuln tests/samples/VUL003_CommandInjection_Runtime.java --summary
 
 # XSS detection (Working)
-python bean_vuln_cli.py tests/samples/VUL006_XSS_ServletResponse.java --summary
+bean-vuln tests/samples/VUL006_XSS_ServletResponse.java --summary
 
 # Batch processing (24 files in ~90 seconds)
-python bean_vuln_cli.py tests/samples/ --recursive --summary
+bean-vuln tests/samples/ --recursive --summary
 
 # Advanced features with counterfactual explanations
-python bean_vuln_cli.py tests/samples/VUL001_SQLInjection_Basic.java --ensemble --advanced-features --explain --summary
+bean-vuln tests/samples/VUL001_SQLInjection_Basic.java --ensemble --advanced-features --explain --summary
 ```
 
 ## 📊 **Verified Performance Results**
@@ -257,7 +236,7 @@ python bean_vuln_cli.py tests/samples/VUL001_SQLInjection_Basic.java --ensemble 
 
 ### **Advanced Features Tested**
 - ✅ **Ensemble Methods**: Voting, BMA, stacking classifiers
-- ✅ **Feature Engineering**: GAT, Temporal GNN, Multi-scale analysis
+- ⚠️ **Feature Engineering**: Experimental stubs (not used in scoring)
 - ✅ **AEG Lite**: Binary analysis, exploitability scoring, patch ranking
 - ✅ **Counterfactual Explanations**: AST-aware minimal-change recommendations
 - ✅ **Bayesian Uncertainty**: Confidence-aware predictions
@@ -283,8 +262,8 @@ The original error was caused by:
 2. DGL compatibility issues with newer Python versions
 3. Complex dependency chain problems (PyTorch + torchdata + DGL)
 
-### **Solution Applied**: Mac Silicon Optimized Installation
-Our comprehensive fix script (`fix_dgl_mac_silicon.sh`) resolves:
+### **Solution**: Manual Version Pinning
+Use the exact versions below to avoid DGL/PyTorch compatibility issues:
 - ✅ **Python 3.11 compatibility** (DGL has full support)
 - ✅ **Exact version matching** (PyTorch 2.1.0 + torchdata 0.7.0 + DGL 2.1.0)
 - ✅ **angr installation** (9.2.166 works perfectly on Apple Silicon)
@@ -313,19 +292,15 @@ brew install python@3.11
 python3.11 -m venv venv_bean_311
 source venv_bean_311/bin/activate
 
-# 3. Run comprehensive Mac Silicon setup
-./fix_dgl_mac_silicon.sh
-
-# 4. Install Joern
-./scripts/install_joern.sh
-
-# 5. Install Bean Vulnerable package (enables bean-vuln command)
+# 3. Install dependencies (CPU wheels shown)
+pip install --upgrade pip
+pip install torch==2.1.0 torchvision==0.16.0 torchaudio==2.1.0 --index-url https://download.pytorch.org/whl/cpu
+pip install torchdata==0.7.0
+pip install dgl==2.1.0 -f https://data.dgl.ai/wheels/torch-2.1/repo.html
+pip install -r requirements.txt
 pip install -e .
 
-# 6. Set up environment optimizations
-source mac_silicon_env.sh
-
-# 7. Verify installation (Comprehensive)
+# 4. Verify installation
 python verify_installation.py
 ```
 
@@ -402,12 +377,17 @@ pip install -e .
 ## 🎯 Interpreting Confidence Scores
 
 ### Final Weighted Confidence (Recommended)
-Combines all three approaches:
-- **Formula**: `0.4 * CESCL + 0.4 * Bayesian + 0.2 * Traditional`
+Heuristic confidence combines Bayesian and traditional approaches:
+- **Heuristic formula**: `0.7 * Bayesian + 0.3 * Traditional`
+
+When spatial GNN inference runs **and** trained weights are loaded:
+- **GNN blend**: `0.5 * Heuristic + 0.5 * GNN`
 - **0.8+**: High confidence, proceed with remediation
 - **0.6-0.8**: Good confidence, validate findings  
 - **0.4-0.6**: Moderate confidence, manual review recommended
 - **< 0.4**: Low confidence, likely false positive
+
+**Calibration status:** Heuristic only. No empirical calibration set is bundled yet; use uncertainty metrics for manual triage.
 
 ### Exploitability Scores (CVSS-like 0.0-10.0)
 - **9.0-10.0**: Critical - Immediate action required
@@ -421,25 +401,25 @@ Combines all three approaches:
 ### Blue Team (Defensive Security)
 ```bash
 # Comprehensive security assessment
-python bean_vuln_cli.py /production/source --recursive --ensemble --summary
+bean-vuln /production/source --recursive --ensemble --summary
 
 # Generate security fix recommendations
-python bean_vuln_cli.py vulnerable.java --explain --json-output fixes.json
+bean-vuln vulnerable.java --explain --out fixes.json
 
 # CI/CD security gate
-python bean_vuln_cli.py $CHANGED_FILE --summary --json-output ci_report.json
+bean-vuln $CHANGED_FILE --summary --out ci_report.json
 ```
 
 ### Red Team (Offensive Security)  
 ```bash
-# Exploitability analysis
-python bean_vuln_cli.py target.java --aeg-lite --summary
+# Exploitability analysis (prototype; not exposed in CLI yet)
+bean-vuln target.java --summary
 
 # Counterfactual analysis for exploit development
-python bean_vuln_cli.py target.java --explain --verbose
+bean-vuln target.java --explain --verbose
 
 # Batch target assessment
-python bean_vuln_cli.py /target/source --recursive --aeg --json-output targets.json
+bean-vuln /target/source --recursive --out targets.json
 ```
 
 ## 🧪 Testing and Validation
@@ -454,7 +434,7 @@ print('✅ Framework test passed')
 "
 
 # Test with provided samples
-python bean_vuln_cli.py tests/samples/VUL001_SQLInjection_Basic.java --summary
+bean-vuln tests/samples/VUL001_SQLInjection_Basic.java --summary
 
 # Run comprehensive test suite
 python -m pytest tests/ -v
@@ -464,41 +444,38 @@ python -m pytest tests/ -v
 ```
 ✅ Framework initialization: SUCCESS
 ✅ Joern integration: WORKING  
-✅ DGL graph operations: WORKING
+⚠️ DGL graph modules: OPTIONAL (not used in scoring)
 ✅ AEG Lite extension: LOADED
 ✅ Sample vulnerability detection: 14/24 files detected
-✅ Advanced features: ALL OPERATIONAL
+⚠️ Advanced features: PARTIAL/EXPERIMENTAL
 ```
 
 ## 🏗️ Architecture Overview
 
 ```
-Source Code → Joern CPG → Enhanced GNN → Multi-Modal Analysis
-     ↓            ↓              ↓                ↓
-  Java File → 133 Nodes → CESCL+Bayesian → Vuln + Exploit Score
-                                ↓                ↓
-                        Dataset Quality → Risk Assessment
-                                ↓                ↓
-                   CF-Explainers → Security Fix Recommendations
+Source Code → Joern CPG → Heuristic Scoring + Bayesian → Vulnerability Output
+     ↓            ↓                 ↓                      ↓
+  Java File → CPG Metrics → Pattern + Uncertainty → Risk Assessment
+                                   ↓                      ↓
+                          CF-Explainers → Security Fix Recommendations
 ```
 
-### Core Components (All Working)
+### Core Components (Current)
 1. **JoernIntegrator**: CPG generation and analysis ✅
-2. **CESCLLoss**: Cluster-enhanced contrastive learning ✅
-3. **DatasetMapAnalyzer**: Quality assessment and active learning ✅
-4. **AEGLite**: Exploitability assessment engine ✅
+2. **CESCLLoss**: Cluster-enhanced contrastive learning (module available) ⚠️
+3. **DatasetMapAnalyzer**: Quality assessment and active learning (module available) ⚠️
+4. **AEGLite**: Exploitability assessment engine (prototype; binary analysis) ⚠️
 5. **Enhanced CF-Explainer**: AST-aware counterfactual generation ✅
-6. **IntegratedGNNFramework**: Main orchestrator ✅
+6. **Spatial GNN (experimental)**: Optional inference; trained weights required for accuracy ⚠️
+7. **IntegratedGNNFramework**: Main orchestrator ✅
 
-The Bean Vulnerable Framework is **production-ready** on Mac Silicon with:
+The Bean Vulnerable Framework is a **prototype** on Mac Silicon with:
 
-- ✅ **Complete dependency resolution** (all issues fixed)
-- ✅ **AEG Lite fully functional** (angr 9.2.166 working)
-- ✅ **All advanced features operational** (ensemble, GAT, temporal GNN)
-- ✅ **Vulnerability detection verified** (14 types detected successfully)
-- ✅ **Mac Silicon optimizations** (MPS GPU acceleration)
+- ✅ **Pinned dependency guidance** for known DGL/PyTorch issues
+- ⚠️ **AEG Lite** uses binary analysis and mock builds when no build script exists
+- ⚠️ **Advanced features** are partially implemented or experimental stubs
+- ✅ **Vulnerability detection** works on bundled samples (heuristic)
 - ✅ **Counterfactual explanations** (AST-aware recommendations)
-- ✅ **Performance validated** (90 seconds for 24 files)
 
 ## 📞 Support
 
