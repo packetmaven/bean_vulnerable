@@ -4,7 +4,6 @@ Demonstrates Joern integration, CPG generation, and GNN processing
 """
 
 import os
-import shutil
 import logging
 import subprocess
 import json
@@ -14,8 +13,6 @@ from typing import Dict, List, Any, Optional, Tuple, Union
 import statistics
 import math
 import random
-from datetime import datetime
-from string import Template
 import re
 
 # Optional Tai-e integration
@@ -50,9 +47,7 @@ except Exception:  # pragma: no cover - optional module
     TEMPLATE_ENGINE_AVAILABLE = False
 
 # Comprehensive Taint Tracking - INTEGRATED (No external module)
-from dataclasses import dataclass, field
 from collections import defaultdict
-import time
 
 TAINT_TRACKING_AVAILABLE = True  # Always available now
 
@@ -439,16 +434,7 @@ class VulnerabilityDetector:
     
     def _detect_command_injection(self, code: str) -> bool:
         """Detect command injection patterns"""
-        import re
-        
         # Specific command execution patterns (not SQL exec methods)
-        dangerous_methods = [
-            'Runtime.getRuntime().exec',
-            'Runtime.exec',
-            'ProcessBuilder',
-            '.start()',  # Process start
-        ]
-        
         # Check for Runtime.exec or ProcessBuilder patterns
         has_runtime_exec = 'Runtime.getRuntime().exec' in code or 'Runtime.exec' in code
         has_process_builder = 'ProcessBuilder' in code or 'new ProcessBuilder' in code
@@ -514,17 +500,6 @@ class VulnerabilityDetector:
     def _detect_ldap_injection(self, code: str) -> bool:
         """Detect LDAP injection patterns"""
         import re
-        ldap_patterns = [
-            'LDAP injection vulnerability',
-            '(uid=',
-            '(cn=',
-            'userPassword=',
-            'LDAP Search',
-            'performLDAPSearch',
-            'MockDirContext',
-            'search(',
-            'filter'
-        ]
         has_ldap_context = any(pattern in code for pattern in ['LDAP', 'ldap', 'search(', 'filter'])
         has_concatenation = '+' in code and '"' in code
         if has_ldap_context and has_concatenation:

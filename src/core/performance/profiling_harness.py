@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import os
 
 try:
     import psutil  # type: ignore
@@ -31,6 +32,7 @@ class ProfilingConfiguration:
     enable_tai_e_profiling: bool = False
     enable_system_profiling: bool = False
     enable_jfr: bool = False
+    enable_heapdump: bool = False
 
     async_profiler_path: Optional[Path] = None
     yourkit_agent_path: Optional[Path] = None
@@ -42,6 +44,11 @@ class ProfilingConfiguration:
     min_heap: Optional[str] = None
     use_g1gc: bool = True
 
+    heapdump_delay_seconds: int = 5
+    mat_path: Optional[Path] = None
+    mat_query: str = "suspects"
+    mat_format: str = "csv"
+
     output_dir: Path = Path("analysis") / "tai_e_profiling"
 
 
@@ -50,6 +57,7 @@ class MultiLayerProfiler:
 
     def __init__(self, config: ProfilingConfiguration) -> None:
         self.config = config
+        self.config.output_dir = self.config.output_dir.expanduser().resolve()
         self.config.output_dir.mkdir(parents=True, exist_ok=True)
         self.session_id = int(time.time())
 
@@ -124,7 +132,7 @@ class MultiLayerProfiler:
                 results["errors"].extend(compile_errors)
                 return results
 
-            output_dir = self.config.output_dir / f"tai_e_{self.session_id}"
+            output_dir = (self.config.output_dir / f"tai_e_{self.session_id}").resolve()
             output_dir.mkdir(parents=True, exist_ok=True)
 
             cmd = self._build_tai_e_command(
@@ -140,18 +148,38 @@ class MultiLayerProfiler:
                 system_monitor.start()
 
             start_time = time.time()
+            tai_e_cwd = self._resolve_tai_e_cwd(jar_path)
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                cwd=str(tai_e_cwd),
             )
-            results["process_metrics"] = self._monitor_process(process)
+            monitor_result = self._monitor_process(process, output_dir)
+            results["process_metrics"] = monitor_result.get("metrics", {})
+            if monitor_result.get("heapdump"):
+                heapdump_info = monitor_result.get("heapdump") or {}
+                results["layers"]["heapdump"] = heapdump_info
+                if heapdump_info.get("path"):
+                    results["heapdump_path"] = heapdump_info.get("path")
+
             stdout, stderr = process.communicate()
             results["elapsed_time"] = time.time() - start_time
             results["return_code"] = process.returncode
             (output_dir / "tai-e.stdout").write_text(stdout or "", encoding="utf-8")
             (output_dir / "tai-e.stderr").write_text(stderr or "", encoding="utf-8")
+
+            heapdump_path = results.get("heapdump_path")
+            if heapdump_path:
+                mat_info = self._run_mat(Path(heapdump_path), output_dir)
+                results["layers"]["mat"] = mat_info
+                if mat_info.get("csv_path"):
+                    results["mat_csv_path"] = mat_info.get("csv_path")
+                if mat_info.get("report_path"):
+                    results["mat_report_path"] = mat_info.get("report_path")
+                if mat_info.get("object_profile_report"):
+                    results["object_profile_report"] = mat_info.get("object_profile_report")
 
             if system_monitor:
                 results["layers"]["system"] = system_monitor.stop()
@@ -217,6 +245,119 @@ class MultiLayerProfiler:
 
         return options
 
+    def _capture_heap_dump(self, pid: int, output_dir: Path) -> Dict[str, Any]:
+        jcmd = shutil.which("jcmd")
+        if not jcmd:
+            return {"error": "jcmd_not_found"}
+        if PSUTIL_AVAILABLE and not psutil.pid_exists(pid):
+            return {"error": "process_exited"}
+        heapdump_path = (output_dir / f"heapdump_{self.session_id}.hprof").resolve()
+        try:
+            result = subprocess.run(
+                [jcmd, str(pid), "GC.heap_dump", str(heapdump_path)],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                return {"error": "heapdump_failed", "stderr": result.stderr.strip()}
+            if not heapdump_path.exists():
+                return {
+                    "error": "heapdump_missing",
+                    "stderr": result.stderr.strip(),
+                    "stdout": result.stdout.strip(),
+                }
+        except Exception as exc:
+            return {"error": "heapdump_exception", "stderr": str(exc)}
+        return {"path": str(heapdump_path)}
+
+    def _run_mat(self, heapdump_path: Path, output_dir: Path) -> Dict[str, Any]:
+        mat_cmd = self._resolve_mat_command()
+        if not mat_cmd:
+            return {"error": "mat_not_found"}
+        query = (self.config.mat_query or "").strip()
+        query_lower = query.lower()
+        report_id: Optional[str] = None
+        report_suffix: Optional[str] = None
+
+        if query_lower in {"histogram", "suspects", "leak_suspects", "leak-suspects"}:
+            report_id = "org.eclipse.mat.api:suspects"
+            report_suffix = "Leak_Suspects"
+        elif query_lower in {"top_components", "top-components"}:
+            report_id = "org.eclipse.mat.api:top_components"
+            report_suffix = "Top_Components"
+        elif ":" in query:
+            report_id = query
+            if query_lower.endswith("suspects"):
+                report_suffix = "Leak_Suspects"
+            elif query_lower.endswith("top_components"):
+                report_suffix = "Top_Components"
+
+        if report_id:
+            cmd = mat_cmd + [str(heapdump_path), report_id]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                return {
+                    "error": "mat_failed",
+                    "stderr": result.stderr.strip(),
+                    "stdout": result.stdout.strip(),
+                }
+            report_path: Optional[Path] = None
+            if report_suffix:
+                candidate = heapdump_path.with_name(f"{heapdump_path.stem}_{report_suffix}.zip")
+                if candidate.exists():
+                    report_path = candidate
+            if not report_path:
+                matches = list(heapdump_path.parent.glob(f"{heapdump_path.stem}_*.zip"))
+                if matches:
+                    report_path = max(matches, key=lambda p: p.stat().st_mtime)
+            if report_path:
+                return {"report_path": str(report_path)}
+            return {}
+
+        csv_path = output_dir / f"mat_{query_lower}_{self.session_id}.csv"
+        cmd = mat_cmd + [
+            str(heapdump_path),
+            f"org.eclipse.mat.api:{query}",
+            f"-format={self.config.mat_format}",
+            "-output",
+            str(csv_path),
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0 or not csv_path.exists():
+            return {
+                "error": "mat_failed",
+                "stderr": result.stderr.strip(),
+                "stdout": result.stdout.strip(),
+            }
+        mat_info: Dict[str, Any] = {"csv_path": str(csv_path)}
+        try:
+            from core.performance.object_profiler import ObjectCentricProfiler
+
+            report_path = output_dir / f"object_profile_mat_{self.session_id}.html"
+            profiler = ObjectCentricProfiler(csv_path)
+            profiler.generate_optimization_report(report_path)
+            mat_info["object_profile_report"] = str(report_path)
+        except Exception as exc:
+            mat_info["object_profile_error"] = str(exc)
+        return mat_info
+
+    def _resolve_mat_command(self) -> Optional[List[str]]:
+        mat_path = self.config.mat_path
+        if not mat_path:
+            env = os.getenv("MAT_HOME") or os.getenv("MAT_PATH")
+            if env:
+                mat_path = Path(env).expanduser()
+        if not mat_path:
+            return None
+        mat_path = mat_path.expanduser()
+        if mat_path.is_dir():
+            for name in ("ParseHeapDump.sh", "ParseHeapDump.bat"):
+                candidate = mat_path / name
+                if candidate.exists():
+                    return [str(candidate)]
+            return None
+        return [str(mat_path)]
+
     def _build_tai_e_command(
         self,
         jar_path: Path,
@@ -258,15 +399,40 @@ class MultiLayerProfiler:
         logger.info("Tai-e profiling command: %s", " ".join(cmd))
         return cmd
 
-    def _monitor_process(self, process: subprocess.Popen) -> Dict[str, Any]:
+    def _resolve_tai_e_cwd(self, jar_path: Path) -> Path:
+        candidates: List[Path] = [jar_path.parent, jar_path.parent.parent]
+        for base in list(candidates):
+            candidates.extend([
+                base / "source" / "Tai-e",
+                base / "source" / "tai-e",
+                base / "Tai-e",
+                base / "tai-e",
+            ])
+        for root in candidates:
+            if (root / "java-benchmarks").exists():
+                return root
+        return jar_path.parent
+
+    def _monitor_process(self, process: subprocess.Popen, output_dir: Path) -> Dict[str, Any]:
         if not PSUTIL_AVAILABLE:
-            return {"psutil_available": False}
+            heapdump_info: Dict[str, Any] = {}
+            if self.config.enable_heapdump:
+                time.sleep(self.config.heapdump_delay_seconds)
+                if process.poll() is None:
+                    heapdump_info = self._capture_heap_dump(process.pid, output_dir)
+            return {"metrics": {"psutil_available": False}, "heapdump": heapdump_info or None}
 
         metrics = {
             "cpu_samples": [],
             "rss_samples": [],
             "thread_samples": [],
         }
+        heapdump_info: Dict[str, Any] = {}
+        heapdump_done = False
+        heapdump_start = time.time()
+        if self.config.enable_heapdump and self.config.heapdump_delay_seconds <= 0:
+            heapdump_info = self._capture_heap_dump(process.pid, output_dir)
+            heapdump_done = True
         try:
             ps_process = psutil.Process(process.pid)
             while process.poll() is None:
@@ -274,6 +440,21 @@ class MultiLayerProfiler:
                 mem_info = ps_process.memory_info()
                 metrics["rss_samples"].append(mem_info.rss / 1024 / 1024)
                 metrics["thread_samples"].append(ps_process.num_threads())
+                if self.config.enable_heapdump and not heapdump_done:
+                    elapsed = time.time() - heapdump_start
+                    if elapsed >= self.config.heapdump_delay_seconds:
+                        heapdump_info = self._capture_heap_dump(process.pid, output_dir)
+                        heapdump_done = True
+            if self.config.enable_heapdump and not heapdump_done:
+                heapdump_info = {"error": "process_exited_before_heapdump"}
+        except psutil.ZombieProcess:
+            logger.debug("Process monitoring ended: PID is zombie (%s)", process.pid)
+            if self.config.enable_heapdump and not heapdump_done:
+                heapdump_info = {"error": "process_zombie_before_heapdump"}
+        except psutil.NoSuchProcess:
+            logger.debug("Process monitoring ended: process exited (%s)", process.pid)
+            if self.config.enable_heapdump and not heapdump_done:
+                heapdump_info = {"error": "process_exited_before_heapdump"}
         except Exception as exc:
             logger.warning("Process monitoring failed: %s", exc)
 
@@ -283,10 +464,13 @@ class MultiLayerProfiler:
             return {"mean": sum(values) / len(values), "max": max(values)}
 
         return {
-            "psutil_available": True,
-            "cpu_percent": _summarize(metrics["cpu_samples"]),
-            "memory_rss_mb": _summarize(metrics["rss_samples"]),
-            "num_threads": _summarize(metrics["thread_samples"]),
+            "metrics": {
+                "psutil_available": True,
+                "cpu_percent": _summarize(metrics["cpu_samples"]),
+                "memory_rss_mb": _summarize(metrics["rss_samples"]),
+                "num_threads": _summarize(metrics["thread_samples"]),
+            },
+            "heapdump": heapdump_info or None,
         }
 
     def _collect_cpu_profiling_results(self, output_dir: Path) -> Dict[str, Any]:
@@ -348,6 +532,10 @@ class MultiLayerProfiler:
 
     def _build_report_html(self, results: Dict[str, Any]) -> str:
         cpu = results.get("layers", {}).get("cpu", {})
+        heapdump_path = results.get("heapdump_path")
+        mat_csv_path = results.get("mat_csv_path")
+        mat_report_path = results.get("mat_report_path")
+        object_profile_report = results.get("object_profile_report")
         return f"""
 <!DOCTYPE html>
 <html>
@@ -367,6 +555,13 @@ class MultiLayerProfiler:
   <div class="summary">
     <div class="metric"><strong>Total Time:</strong> {results.get("elapsed_time", 0.0):.2f}s</div>
     <div class="metric"><strong>Return Code:</strong> {results.get("return_code")}</div>
+  </div>
+  <div class="layer">
+    <h2>Heap Dump / MAT</h2>
+    <p><strong>Heap dump:</strong> {heapdump_path or "not captured"}</p>
+    <p><strong>MAT report:</strong> {mat_report_path or "not generated"}</p>
+    <p><strong>MAT CSV:</strong> {mat_csv_path or "not generated"}</p>
+    <p><strong>Object profile:</strong> {object_profile_report or "not generated"}</p>
   </div>
   <div class="layer">
     <h2>CPU Profiling</h2>
