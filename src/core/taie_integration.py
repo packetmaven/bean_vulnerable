@@ -464,11 +464,19 @@ class TaiEIntegration:
         cmd.extend(["-a", ";".join(analysis_opts)])
 
         LOG.info("Tai-e command: %s", " ".join(cmd))
+        candidates = [jar_path.parent, jar_path.parent.parent]
+        for base in list(candidates):
+            candidates.extend([
+                base / "source" / "Tai-e",
+                base / "source" / "tai-e",
+                base / "Tai-e",
+                base / "tai-e",
+            ])
         tai_e_cwd = jar_path.parent
-        if (jar_path.parent / "java-benchmarks").exists():
-            tai_e_cwd = jar_path.parent
-        elif (jar_path.parent.parent / "java-benchmarks").exists():
-            tai_e_cwd = jar_path.parent.parent
+        for candidate in candidates:
+            if (candidate / "java-benchmarks").exists():
+                tai_e_cwd = candidate
+                break
         try:
             result = subprocess.run(
                 cmd,

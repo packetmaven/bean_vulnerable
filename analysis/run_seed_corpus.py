@@ -530,12 +530,32 @@ def main() -> int:
         help="Enable system-level sampling during profiling.",
     )
     parser.add_argument(
+        "--profile-heapdump",
+        action="store_true",
+        help="Capture a JVM heap dump during Tai-e profiling (requires jcmd).",
+    )
+    parser.add_argument(
+        "--profile-heapdump-delay",
+        type=int,
+        default=5,
+        help="Seconds to wait before heap dump capture (default: 5).",
+    )
+    parser.add_argument(
         "--profile-max-heap",
         help="Set JVM -Xmx for profiling runs (e.g. 8g).",
     )
     parser.add_argument(
         "--profile-min-heap",
         help="Set JVM -Xms for profiling runs (e.g. 2g).",
+    )
+    parser.add_argument(
+        "--mat-path",
+        help="Path to Eclipse MAT ParseHeapDump script or MAT_HOME directory.",
+    )
+    parser.add_argument(
+        "--mat-query",
+        default="suspects",
+        help="MAT report to run (suspects|top_components; default: suspects).",
     )
     parser.add_argument(
         "--object-profile",
@@ -673,8 +693,13 @@ def main() -> int:
             args.cli_arg.append("--profile-jfr")
         if args.profile_system and "--profile-system" not in args.cli_arg:
             args.cli_arg.append("--profile-system")
+        if args.profile_heapdump and "--profile-heapdump" not in args.cli_arg:
+            args.cli_arg.append("--profile-heapdump")
+        _ensure_cli_arg(args.cli_arg, "--profile-heapdump-delay", args.profile_heapdump_delay)
         _ensure_cli_arg(args.cli_arg, "--profile-max-heap", args.profile_max_heap)
         _ensure_cli_arg(args.cli_arg, "--profile-min-heap", args.profile_min_heap)
+        _ensure_cli_arg(args.cli_arg, "--mat-path", args.mat_path)
+        _ensure_cli_arg(args.cli_arg, "--mat-query", args.mat_query)
         _ensure_cli_arg(args.cli_arg, "--object-profile", args.object_profile)
         _ensure_cli_arg(args.cli_arg, "--object-profile-output", args.object_profile_output)
 

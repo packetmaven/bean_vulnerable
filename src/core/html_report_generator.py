@@ -1750,6 +1750,10 @@ def _generate_profiling_section(tai_e_profiling: Dict[str, Any]) -> str:
         return ""
     status = "✅ Completed" if tai_e_profiling.get("success") else "⚠️ Failed"
     report_path = tai_e_profiling.get("report_path")
+    heapdump_path = tai_e_profiling.get("heapdump_path")
+    mat_csv_path = tai_e_profiling.get("mat_csv_path")
+    mat_report_path = tai_e_profiling.get("mat_report_path")
+    object_profile_report = tai_e_profiling.get("object_profile_report")
     summary = tai_e_profiling.get("summary", {}) if isinstance(tai_e_profiling.get("summary", {}), dict) else {}
     elapsed = summary.get("elapsed_time")
     errors = tai_e_profiling.get("errors") or []
@@ -1758,6 +1762,16 @@ def _generate_profiling_section(tai_e_profiling: Dict[str, Any]) -> str:
         error_html = "<p><strong>Errors:</strong> " + ", ".join(errors) + "</p>"
     link_html = f'<p><a href="{report_path}">Open profiling report</a></p>' if report_path else "<p>Report not generated.</p>"
     elapsed_html = f"<p><strong>Elapsed:</strong> {elapsed:.2f}s</p>" if elapsed is not None else ""
+    heapdump_html = f"<p><strong>Heap dump:</strong> <a href=\"{heapdump_path}\">{heapdump_path}</a></p>" if heapdump_path else ""
+    mat_html = ""
+    if mat_report_path:
+        mat_html = f"<p><strong>MAT report:</strong> <a href=\"{mat_report_path}\">{mat_report_path}</a></p>"
+    elif mat_csv_path:
+        mat_html = f"<p><strong>MAT CSV:</strong> <a href=\"{mat_csv_path}\">{mat_csv_path}</a></p>"
+    object_profile_html = (
+        f"<p><strong>Object profile:</strong> <a href=\"{object_profile_report}\">{object_profile_report}</a></p>"
+        if object_profile_report else ""
+    )
     return f"""
     <div class="section">
         <h4>🧪 Tai-e Profiling</h4>
@@ -1765,6 +1779,9 @@ def _generate_profiling_section(tai_e_profiling: Dict[str, Any]) -> str:
         {elapsed_html}
         {error_html}
         {link_html}
+        {heapdump_html}
+        {mat_html}
+        {object_profile_html}
     </div>
     """
 

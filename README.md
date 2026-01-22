@@ -1,5 +1,5 @@
 # Bean Vulnerable GNN Framework
-> **Status:** Spatial GNN inference runs by default when torch/torch-geometric are installed. For meaningful results, provide trained weights via `--gnn-checkpoint` (or disable with `--no-spatial-gnn`).
+> **Status:** Spatial GNN inference runs by default when torch/torch-geometric are installed. For meaningful results, provide trained weights via `--gnn-checkpoint`. The GNN is always on when dependencies are present (`--no-spatial-gnn` is ignored).
 
 ![Bean Vulnerable ASCII Banner](ascii-art-text.png)
 
@@ -42,14 +42,14 @@ A vulnerability analysis framework with experimental GNN modules; heuristic scor
 The Bean Vulnerable framework combines the following cutting-edge technologies:
 
 - **Joern** for Code Property Graph (CPG) generation
-- **Graph Neural Network modules** (optional inference; trained weights required for trustworthy results)
-- **Pattern-based detection (current release)** with heuristic scoring; trained GNN inference is planned
+- **Graph Neural Network modules** (inference runs; trained weights required for GNN-weighted scoring)
+- **Pattern-based detection (current release)** with heuristic scoring; trained GNN inference is supported via checkpoints
 - **CESCL (Cluster-Enhanced Sup-Con Loss)** for improved 0-day discovery
 - **Dataset-Map + Active Learning** for intelligent data quality management
 - **Counterfactual Explainers** for minimal-change security fix recommendations
 - **Bayesian Uncertainty** for confidence-aware predictions
 - **Advanced Taint Tracking** with implicit flows and context sensitivity
-- **Alias Analysis** with object-sensitive pointer analysis
+- **Alias Analysis** with heuristic field sensitivity + optional Tai-e object-sensitive pointer analysis
 
 ### 🚀 **Quick Start**
 
@@ -73,11 +73,15 @@ python -c "from src.core.integrated_gnn_framework import IntegratedGNNFramework;
 
 # 4. Test with sample file (generates HTML report with all graphs automatically)
 bean-vuln tests/samples/VUL001_SQLInjection_Basic.java --html-report output --summary
+
+# If the console script is not on PATH, use the repo wrappers:
+./bean-vuln tests/samples/VUL001_SQLInjection_Basic.java --html-report output --summary
+./bean-vuln2 tests/samples/VUL001_SQLInjection_Basic.java --comprehensive --html-report output --summary
 ```
 
 ### 🎯 **Two CLI Options**
 
-Bean Vulnerable provides two command-line tools:
+Bean Vulnerable provides two command-line tools (also available as repo wrappers `./bean-vuln` and `./bean-vuln2`):
 
 | Command | Purpose | Speed | Use Case |
 |---------|---------|-------|----------|
@@ -103,6 +107,8 @@ bean-vuln2 file.java --comprehensive --html-report output --summary
 ```
 
 ## 📸 **Example Outputs**
+
+Examples below are from sample runs; your metrics will differ by target, environment, and enabled features. Tai-e sections appear only when Tai-e is enabled and succeeds. GNN-weighted scoring appears only when a trained checkpoint is provided.
 
 ### **Tainted Variables Detection**
 
@@ -485,6 +491,90 @@ bean-vuln2 tests/samples/VUL022_IntegerOverflow.java \
   --summary
 ```
 
+### **Tai-e Integration & Debugging Utilities (Step-by-step)**
+```bash
+# 1) Build Tai-e and set TAI_E_HOME
+./scripts/setup_tai_e.sh
+export TAI_E_HOME="$HOME/tai-e-infrastructure/jars/tai-e-all.jar"
+
+# 2) Run with Tai-e object-sensitive analysis
+bean-vuln tests/samples/VUL001_SQLInjection_Basic.java \
+  --tai-e \
+  --tai-e-home "$TAI_E_HOME" \
+  --tai-e-cs 1-obj \
+  --tai-e-java-version 8 \
+  --tai-e-no-prepend-jvm \
+  --html-report output \
+  --summary
+
+# 3) Optional: Tai-e taint analysis (requires taint config)
+bean-vuln tests/samples/VUL001_SQLInjection_Basic.java \
+  --tai-e --tai-e-taint \
+  --tai-e-taint-config configs/tai_e/taint/web-vulnerabilities.yml \
+  --summary
+
+# 4) Soundness validation (runtime logging vs Tai-e points-to)
+bean-vuln tests/samples/VUL001_SQLInjection_Basic.java \
+  --tai-e --tai-e-soundness \
+  --tai-e-java-version 8 --tai-e-no-prepend-jvm \
+  --summary
+
+# 5) Taint flow graph HTML (D3)
+bean-vuln tests/samples/VUL001_SQLInjection_Basic.java \
+  --taint-graph --html-report output
+
+# 6) Interactive taint debugger (single file only)
+bean-vuln tests/samples/VUL001_SQLInjection_Basic.java --taint-debug
+
+# 7) Precision diagnosis (heuristic hints for Tai-e tuning)
+bean-vuln tests/samples/VUL001_SQLInjection_Basic.java --tai-e-precision-diagnose
+
+# 8) Tai-e profiling harness (best-effort, optional tools)
+bean-vuln tests/samples/VUL001_SQLInjection_Basic.java \
+  --tai-e --tai-e-profile --tai-e-profile-output analysis/tai_e_profiling
+
+# 9) Profiling with heap dump + MAT report (requires jcmd + MAT)
+bean-vuln tests/samples/VUL001_SQLInjection_Basic.java \
+  --tai-e-profile \
+  --tai-e-home "$TAI_E_HOME" \
+  --profile-heapdump \
+  --mat-path "$MAT_HOME" \
+  --mat-query suspects \
+  --tai-e-profile-output analysis/tai_e_profile_sql
+
+# 10) Object-centric memory profiling (CSV export from a profiler)
+bean-vuln tests/samples/VUL001_SQLInjection_Basic.java \
+  --object-profile /path/to/yourkit_export.csv \
+  --object-profile-output analysis/object_profile.html
+
+# Example replacement for PYTHONPATH-based call (venv + CLI)
+source venv_bean_311/bin/activate
+export TAI_E_HOME="$HOME/tai-e-infrastructure/jars/tai-e-all.jar"
+bean-vuln tests/samples/VUL001_SQLInjection_Basic.java \
+  --summary --out analysis/cli_sql_profile.json \
+  --html-report analysis/html_report_sql_profile \
+  --tai-e --tai-e-home "$TAI_E_HOME" \
+  --tai-e-java-version 8 --tai-e-no-prepend-jvm \
+  --tai-e-profile --tai-e-profile-output analysis/tai_e_profile_sql
+```
+
+Notes:
+- Use `--tai-e-java-version 8 --tai-e-no-prepend-jvm` if your system JDK is newer than Java 8.
+- `--tai-e-profile` runs a dedicated Tai-e invocation for profiling; if you also pass `--tai-e` it will run Tai-e twice.
+- Profiling is best-effort; if agent paths/tools aren't provided, the run still completes with minimal metrics.
+- `--profile-heapdump` requires `jcmd` (from the JDK) and a long-enough runtime; adjust `--profile-heapdump-delay` if needed.
+- `--mat-path` accepts a `ParseHeapDump.sh` path or a MAT install directory; `MAT_HOME`/`MAT_PATH` env vars also work.
+- See `docs/tai_e_integration.md` and `docs/tai_e_debugging.md` for deeper details.
+
+### Heap Dump Analysis (Best Tools)
+Heap dumps are captured as `.hprof` files in the profiling output directory.
+
+- **Eclipse Memory Analyzer (MAT)**: best for large dumps and leak analysis. Open the `.hprof`, then run "Leak Suspects" or "Top Components". For headless runs, point `--mat-path` at `ParseHeapDump.sh` and use `--mat-query suspects` or `top_components`.
+- **VisualVM**: quick triage for smaller dumps. Use `File -> Load` and open the `.hprof`.
+- **YourKit**: commercial-grade analysis with excellent retention views; can also export CSV for `--object-profile`.
+
+If you enable `--profile-jfr` or `--async-profiler-path`, open the `.jfr` in **JDK Mission Control (JMC)**. If `jfr2flame` is installed, a flamegraph is generated automatically.
+
 ## 🧠 Spatial GNN Module (Experimental)
 
 Bean Vulnerable includes a **Spatial GNN** module that executes a real GNN forward pass by default when dependencies are present. Heuristic confidence remains the primary score unless trained weights are provided.
@@ -519,12 +609,17 @@ bean-vuln file.java --html-report output --summary
 # Combine with other advanced features (experimental)
 bean-vuln file.java --ensemble --advanced-features --html-report output
 
-# Disable spatial GNN inference if needed
-bean-vuln file.java --no-spatial-gnn --summary
+# GNN weights (required to blend GNN into scoring)
+bean-vuln file.java \
+  --gnn-checkpoint /path/to/checkpoint.pt \
+  --gnn-weight 0.6 \
+  --gnn-confidence-threshold 0.5 \
+  --gnn-temperature 1.0 \
+  --gnn-ensemble 1 \
+  --summary
 ```
 
-> **Note:** Provide trained weights for reliable results (and to use GNN scores in confidence):
-> `bean-vuln file.java --gnn-checkpoint /path/to/checkpoint.pt --summary`
+> **Note:** `--no-spatial-gnn` is deprecated/ignored in this repo; inference runs when dependencies are available.
 
 ### **Installation Requirements**
 
@@ -809,27 +904,42 @@ Dataset is not checked into the repo; each user should download it to
 `datasets/juliet-test-suite` as shown above. The example uses a GitHub mirror;
 the official Juliet Java 1.3 archive is available from NIST SARD if preferred.
 
-### CLI Seed-Corpus Runner (Deterministic)
-This runs the **CLI** (`bean-vuln`) against a deterministic seed list and writes
-results in the same JSON shape as the calibration scripts.
+### Seed-Corpus Runner (CLI or Framework)
+This runs a deterministic seed list and writes results in the same JSON shape as
+the calibration scripts.
 
 ```bash
-# OWASP Benchmark (deterministic sample)
+# OWASP Benchmark via CLI runner (deterministic sample)
 ./venv_bean_311/bin/python analysis/run_seed_corpus.py \
   --dataset benchmark \
+  --runner cli \
   --max-per-category 10 \
   --output analysis/seed_benchmark_results.json
 
-# Juliet (deterministic sample)
+# Juliet via in-process framework runner (faster)
 ./venv_bean_311/bin/python analysis/run_seed_corpus.py \
   --dataset juliet \
+  --runner framework \
   --max-per-category 10 \
   --output analysis/seed_juliet_results.json
+
+# Example: enable Joern dataflow + Tai-e for the CLI runner
+./venv_bean_311/bin/python analysis/run_seed_corpus.py \
+  --dataset benchmark \
+  --runner cli \
+  --max-per-category 5 \
+  --joern-dataflow \
+  --tai-e \
+  --tai-e-home "$TAI_E_HOME" \
+  --tai-e-java-version 8 \
+  --tai-e-no-prepend-jvm \
+  --output analysis/seed_benchmark_taie.json
 ```
 
 Notes:
 - Results files are **local only**; do not commit them to the repo.
 - Use `--all` to run all mapped candidates (can take hours).
+- `--cli-arg` can pass extra raw flags directly to `bean-vuln`.
 
 ### GNN Weights (Training + Usage)
 If you want the Spatial GNN to influence confidence scores, you must train and
@@ -857,9 +967,13 @@ git clone --depth 1 https://github.com/find-sec-bugs/juliet-test-suite.git datas
   --batch-size 8 \
   --limit 2000
 
-# 3) Use the trained checkpoint (best_model.pt) for inference
+# 3) Use the trained checkpoint (best_model.pt) for inference + scoring
 bean-vuln tests/samples/VUL001_SQLInjection_Basic.java \
   --gnn-checkpoint checkpoints/spatial_gnn/juliet/best_model.pt \
+  --gnn-weight 0.6 \
+  --gnn-confidence-threshold 0.5 \
+  --gnn-temperature 1.0 \
+  --gnn-ensemble 1 \
   --summary
 ```
 
@@ -943,31 +1057,38 @@ Tested on specialized samples:
 
 ## 📊 Current vs Future Capabilities
 
-The following table clearly distinguishes between **currently implemented** features and **planned enhancements**:
+The following table distinguishes **current** capabilities from **future** work. Status reflects what is actually implemented in this repo.
 
 | Feature | Current Status | Future Enhancement |
 |---------|---------------|-------------------|
-| **Vulnerability Detection** | ✅ Pattern-based (heuristic; sample-only) | 🔮 ML-trained (92-96% projected) |
-| **Confidence Scoring** | ✅ 0.7×Bayesian + 0.3×Traditional | 🔮 0.4×CESCL + 0.4×Bayesian + 0.2×Traditional |
-| **Taint Tracking** | ✅ 5 advanced features (implicit, context, path, JNI, interprocedural) | ✅ Fully operational |
-| **Graph Generation** | ✅ Automatic CFG/DFG/PDG per method | ✅ Fully operational |
-| **Joern Integration** | ✅ CPG generation working | ✅ Fully operational |
-| **Bayesian Uncertainty** | ✅ Monte Carlo dropout | ✅ Fully operational |
-| **Spatial GNN** | ⚠️ Optional inference (requires checkpoint) | 🔮 Integrate deeper into scoring pipeline |
-| **Ensemble Methods** | ✅ Working (minimal impact: ~0.05%) | 🔮 Significant impact after GNN training |
-| **CESCL Loss** | ✅ Module available | 🔮 Not yet integrated into pipeline |
-| **Dataset-Map** | ✅ Module available | 🔮 Active learning not yet deployed |
-| **CF-Explainer** | ✅ Module available | ✅ Operational with --explain flag |
-| **Symbolic Execution** | ❌ Not implemented | 🔮 Planned (JPF-SPF, JBSE, Z3) |
-| **Concolic Testing** | ❌ Not implemented | 🔮 Planned (JDart integration) |
-| **Tai-e Object-Sensitive** | ❌ Not implemented | 🔮 Planned (v0.5.1 integration) |
-| **Dynamic Taint Tracking** | ❌ Not implemented | 🔮 Planned (Phosphor integration) |
-| **Fuzzing** | ❌ Not implemented | 🔮 Planned (JQF/Zest integration) |
+| **Vulnerability Detection** | ✅ Pattern-based heuristic + optional GNN inference | 🔮 ML‑trained models + calibrated scoring |
+| **Confidence Scoring** | ✅ Heuristic + Bayesian; GNN blended only with checkpoints | 🔮 CESCL integration + improved calibration |
+| **Taint Tracking** | ✅ Heuristic taint sources/flows + sanitizers + sink gating | 🔮 Deeper path feasibility + runtime validation |
+| **Alias Analysis** | ✅ Heuristic field sensitivity; Tai‑e optional | 🔮 More summaries, tuning, performance |
+| **Tai‑e Object‑Sensitive** | ✅ Optional (requires Tai‑e JAR) | 🔮 Broader library summaries + tuning |
+| **Tai‑e Taint Analysis** | ✅ Optional (requires taint config) | 🔮 Expanded rule sets + validation |
+| **Soundness Validation** | ✅ Runtime logging vs Tai‑e points‑to (best‑effort) | 🔮 Finer mapping + automated regression suite |
+| **Precision Diagnosis** | ✅ Heuristic source scan | 🔮 Automated tuning + blended analysis |
+| **Taint Flow Visualization** | ✅ Interactive HTML (D3) | 🔮 Richer slices + filters |
+| **Interactive Taint Debugger** | ✅ CLI‑based queries | 🔮 IDE integration + scripted queries |
+| **Joern CPG + Graphs** | ✅ CPG + CFG/DFG/PDG PNG/SVG | 🔮 Additional flow/path overlays |
+| **Joern reachableByFlows** | ✅ Optional gating metrics | 🔮 Deeper sink‑specific correlation |
+| **Spatial GNN** | ✅ Inference runs; weights required for scoring | 🔮 Improved weights + calibration |
+| **GNN Training Pipeline** | ✅ Training script available | 🔮 Larger datasets + tuned configs |
+| **Ensemble Methods** | ✅ Working (small impact until trained weights) | 🔮 Stronger impact after training |
+| **CF‑Explainer** | ✅ Operational via `--explain` | 🔮 Coverage + stability improvements |
+| **Profiling Harness** | ⚠️ Best‑effort (optional tools) | 🔮 Deeper Tai‑e profiler hooks |
+| **Object‑Centric Profiling** | ⚠️ CSV‑based report | 🔮 Direct profiler API integration |
+| **Symbolic Execution** | ❌ Not integrated into scoring | 🔮 JPF‑SPF/JBSE integration |
+| **Concolic Testing** | ❌ Not integrated into scoring | 🔮 JDart integration |
+| **Dynamic Taint Tracking** | ❌ Not implemented | 🔮 Phosphor integration |
+| **Fuzzing** | ❌ Not implemented | 🔮 JQF/Zest integration |
 
 **Legend:**
-- ✅ **Fully Operational** - Feature works as documented
-- 🔮 **Planned/Future** - Feature planned but not yet implemented
-- ❌ **Not Implemented** - Feature not available
+- ✅ **Operational** - Feature works as documented
+- ⚠️ **Best‑effort/Experimental** - Works with optional tools or limited scope
+- 🔮 **Planned/Future** - Not yet implemented
+- ❌ **Not Implemented** - Feature unavailable
 
 ---
 
@@ -1126,73 +1247,51 @@ Following symbolic execution integration, these dynamic techniques represent the
 
 All techniques leverage **Z3 or CVC5 SMT solvers** as the mathematical engine for constraint solving, proving whether code paths are feasible or impossible under given input conditions.
 
-## 🔮 Future Enhancements
+## 🧩 Optional Integrations
 
-### Tai-e v0.5.1 Object-Sensitive Analysis Integration
+### Tai-e Object-Sensitive Analysis (Optional)
 
-**Status:** Planned for future release
+**Status:** Available (requires Tai-e JAR).
 
-**Goal:** Integrate Tai-e's advanced object-sensitive pointer analysis to achieve +3-5% precision gain in alias analysis (PLDI 2024).
+**Goal:** Optional object-sensitive pointer analysis to improve alias precision. Any precision gains are literature-based estimates, not measured in a single run.
 
-**What This Enables:**
-- **Allocation-site-based context**: Distinguish objects created at different program points
-- **Must-not-alias precision**: High-confidence alias pairs for taint tracking
-- **JDK/Library summaries**: 200+ pre-computed method summaries for common libraries
-- **Improved false positive rate**: Reduce false positives in taint propagation
-
-**Requirements:**
+**Build Tai-e (recommended):**
 ```bash
-# 1. Install Tai-e v0.5.1
-wget https://github.com/pascal-lab/Tai-e/releases/download/v0.5.1/tai-e-0.5.1.zip
-unzip tai-e-0.5.1.zip -d /usr/local/tai-e
-export TAI_E_HOME=/usr/local/tai-e
+# 1) Build from source (includes java-benchmarks submodule)
+./scripts/setup_tai_e.sh
 
-# 2. Requires Java 17+
-java -version  # Should be 17 or higher
+# 2) Set TAI_E_HOME to the built JAR
+export TAI_E_HOME="$HOME/tai-e-infrastructure/jars/tai-e-all.jar"
+
+# 3) Verify
+java -jar "$TAI_E_HOME" --help
 ```
 
-**Configuration (`plan.yml`):**
-```yaml
-pointer-analysis:
-  cs: 1-obj              # 1-object sensitivity (allocation site context)
-  heap-model: allocation-site
-  precision: must-not-alias
-  library-summaries: true
-  jdk-summaries: true
-```
-
-**Planned CLI Usage:**
+**Run with Tai-e enabled:**
 ```bash
-# Enable Tai-e object-sensitive analysis
-bean-vuln2 tests/samples/VUL018_HTTPResponseSplitting.java \
+bean-vuln tests/samples/VUL018_HTTPResponseSplitting.java \
   --tai-e \
-  --tai-e-home /usr/local/tai-e \
+  --tai-e-home "$TAI_E_HOME" \
+  --tai-e-cs 1-obj \
+  --tai-e-java-version 8 \
+  --tai-e-no-prepend-jvm \
   --html-report output \
-  --comprehensive
+  --summary
 ```
 
-**Expected Output:**
+**Notes:**
+- If your system JDK is newer than Java 8, use `--tai-e-java-version 8` and `--tai-e-no-prepend-jvm` to avoid unsupported classfile versions.
+- Tai-e output artifacts are saved under `analysis/tai_e_runs/`.
+- The HTML report shows whether object-sensitive analysis succeeded and includes Tai-e metadata if present.
+
+**Optional Tai-e taint analysis:**
+```bash
+bean-vuln tests/samples/VUL001_SQLInjection_Basic.java \
+  --tai-e \
+  --tai-e-taint \
+  --tai-e-taint-config configs/tai_e/taint/web-vulnerabilities.yml \
+  --summary
 ```
-🎯 Object-Sensitive Analysis (Tai-e v0.5.1)
-Status: ✅ Enabled
-Allocation Site Mappings: 47 tracked
-JDK/Library Summaries: 234 loaded
-Accuracy Gain: +4.2% precision (PLDI 2024)
-```
-
-**Implementation Components:**
-1. `src/core/taie_integration.py` - Tai-e subprocess wrapper
-2. Enhanced `EnhancedAliasAnalyzer` with Tai-e backend
-3. Allocation site tracking with object context
-4. Library summary loading and caching
-5. HTML report integration for Tai-e metrics
-
-**Research Foundation:**
-- PLDI 2024: "Precision-Guided Context Sensitivity for Pointer Analysis"
-- Tai-e v0.5.1: Modern Java static analysis platform
-- Object-sensitive analysis: 1-obj and 2-obj context strategies
-
-This enhancement will complement the existing built-in alias analysis, providing an optional high-precision mode for production environments where accuracy is critical.
 
 ## 🔒 Security Policy
 

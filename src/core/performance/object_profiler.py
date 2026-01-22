@@ -47,9 +47,22 @@ class ObjectCentricProfiler:
         with csv_file.open("r", encoding="utf-8", errors="ignore") as handle:
             reader = csv.DictReader(handle)
             for row in reader:
-                class_name = row.get("Class") or row.get("class") or ""
-                count = int(row.get("Count") or row.get("count") or 0)
-                size = int(row.get("Retained Size") or row.get("retained_size") or row.get("Size") or 0)
+                class_name = (
+                    row.get("Class")
+                    or row.get("Class Name")
+                    or row.get("Class name")
+                    or row.get("class")
+                    or ""
+                )
+                count = self._parse_int(row.get("Count") or row.get("Objects") or row.get("count"))
+                size = self._parse_int(
+                    row.get("Retained Size")
+                    or row.get("Retained Heap")
+                    or row.get("Retained Size (bytes)")
+                    or row.get("Retained")
+                    or row.get("Size")
+                    or row.get("Shallow Heap")
+                )
                 profiles.append(
                     ObjectProfile(
                         allocation_site=row.get("Allocation Site", ""),
@@ -61,6 +74,17 @@ class ObjectCentricProfiler:
                     )
                 )
         return profiles
+
+    def _parse_int(self, value: Optional[str]) -> int:
+        if value is None:
+            return 0
+        text = str(value).strip().replace(",", "")
+        if not text:
+            return 0
+        try:
+            return int(float(text))
+        except Exception:
+            return 0
 
     def _identify_optimization_opportunities(self) -> List[Dict[str, str]]:
         opportunities: List[Dict[str, str]] = []

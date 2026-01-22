@@ -707,10 +707,14 @@ def _apply_debug_utilities(
             enable_tai_e_profiling=False,
             enable_system_profiling=cli_args.profile_system,
             enable_jfr=cli_args.profile_jfr,
+            enable_heapdump=cli_args.profile_heapdump,
             async_profiler_path=Path(cli_args.async_profiler_path).expanduser() if cli_args.async_profiler_path else None,
             yourkit_agent_path=Path(cli_args.yourkit_agent_path).expanduser() if cli_args.yourkit_agent_path else None,
             max_heap=cli_args.profile_max_heap,
             min_heap=cli_args.profile_min_heap,
+            heapdump_delay_seconds=cli_args.profile_heapdump_delay,
+            mat_path=Path(cli_args.mat_path).expanduser() if cli_args.mat_path else None,
+            mat_query=cli_args.mat_query,
             output_dir=output_dir,
         )
         profiler = MultiLayerProfiler(profiling_config)
@@ -731,17 +735,34 @@ def _apply_debug_utilities(
             },
         )
         report_path = profile_results.get("profiling_report")
+        heapdump_path = profile_results.get("heapdump_path")
+        mat_csv_path = profile_results.get("mat_csv_path")
+        mat_report_path = profile_results.get("mat_report_path")
+        object_profile_report = profile_results.get("object_profile_report")
         if report_path and output_base.suffix == ".html" and report_path != str(output_base):
             try:
                 Path(report_path).replace(output_base)
                 report_path = str(output_base)
             except Exception:
                 pass
-        if report_dir and report_path and Path(report_path).is_absolute() and report_dir in Path(report_path).parents:
-            report_path = str(Path(report_path).relative_to(report_dir))
+        if report_dir:
+            if report_path and Path(report_path).is_absolute() and report_dir in Path(report_path).parents:
+                report_path = str(Path(report_path).relative_to(report_dir))
+            if heapdump_path and Path(heapdump_path).is_absolute() and report_dir in Path(heapdump_path).parents:
+                heapdump_path = str(Path(heapdump_path).relative_to(report_dir))
+            if mat_csv_path and Path(mat_csv_path).is_absolute() and report_dir in Path(mat_csv_path).parents:
+                mat_csv_path = str(Path(mat_csv_path).relative_to(report_dir))
+            if mat_report_path and Path(mat_report_path).is_absolute() and report_dir in Path(mat_report_path).parents:
+                mat_report_path = str(Path(mat_report_path).relative_to(report_dir))
+            if object_profile_report and Path(object_profile_report).is_absolute() and report_dir in Path(object_profile_report).parents:
+                object_profile_report = str(Path(object_profile_report).relative_to(report_dir))
         result["tai_e_profiling"] = {
             "success": profile_results.get("return_code") == 0 and not profile_results.get("errors"),
             "report_path": report_path,
+            "heapdump_path": heapdump_path,
+            "mat_csv_path": mat_csv_path,
+            "mat_report_path": mat_report_path,
+            "object_profile_report": object_profile_report,
             "errors": profile_results.get("errors"),
             "summary": {
                 "elapsed_time": profile_results.get("elapsed_time"),
@@ -957,10 +978,18 @@ def main():
                     help="Enable JVM Flight Recorder collection during profiling")
     ap.add_argument("--profile-system", action="store_true",
                     help="Enable system-level sampling during profiling")
+    ap.add_argument("--profile-heapdump", action="store_true",
+                    help="Capture a JVM heap dump during Tai-e profiling (requires jcmd)")
+    ap.add_argument("--profile-heapdump-delay", type=int, default=5,
+                    help="Seconds to wait before heap dump capture (default: 5)")
     ap.add_argument("--profile-max-heap",
                     help="Set JVM -Xmx for profiling runs (e.g. 8g)")
     ap.add_argument("--profile-min-heap",
                     help="Set JVM -Xms for profiling runs (e.g. 2g)")
+    ap.add_argument("--mat-path",
+                    help="Path to Eclipse MAT ParseHeapDump script or MAT_HOME directory")
+    ap.add_argument("--mat-query", default="suspects",
+                    help="MAT report to run (suspects|top_components; default: suspects)")
     ap.add_argument("--object-profile",
                     help="Path to YourKit snapshot or CSV export for object profiling")
     ap.add_argument("--object-profile-output",
