@@ -22,7 +22,10 @@ import java.nio.file.{Files, Paths}
     
     // Check if cpgFile is a .java source file or an existing CPG
     val cpgFilePath = Paths.get(cpgFile)
-    if (cpgFile.endsWith(".java")) {
+    if (Files.isDirectory(cpgFilePath)) {
+        println(s"Generating CPG from source directory: $cpgFile")
+        importCode(cpgFile)
+    } else if (cpgFile.endsWith(".java")) {
         // Generate CPG from Java source
         println(s"Generating CPG from Java source: $cpgFile")
         importCode(cpgFile)
@@ -185,6 +188,34 @@ import java.nio.file.{Files, Paths}
         
         s"""{"name":"${escapeJson(method.name)}","full_name":"${escapeJson(method.fullName)}","signature":"${escapeJson(method.signature)}","line_number":${method.lineNumber.getOrElse(0)},"num_parameters":${method.parameter.size},"num_locals":${method.local.size},"num_calls":${method.call.size},"cyclomatic_complexity":${method.controlStructure.size},"is_public":$isPublic,"is_static":$isStatic,"is_private":$isPrivate,"is_protected":$isProtected}"""
     }.l
+
+    println("Computing reachableByFlows statistics...")
+    val sourcePattern = "(?i)getparameter|getheader|getcookie|getinputstream|getreader|readline|read|nextline"
+    val sources = cpg.call.name(sourcePattern)
+    val sourceCount = try { sources.size } catch { case _: Throwable => 0 }
+
+    val sinkPatterns = Map(
+        "sql_injection" -> "(?i)executequery|executeupdate|execute\\(|preparestatement|createquery|createstatement|preparecall|nativequery",
+        "command_injection" -> "(?i)exec|start",
+        "path_traversal" -> "(?i)new\\s+file\\(|fileinputstream|fileoutputstream|filereader|filewriter|paths\\.get|files\\.read|files\\.write",
+        "xss" -> "(?i)getwriter\\(|printwriter|jspwriter|getoutputstream\\(|sendredirect\\(|println\\(|print\\(|write\\(",
+        "ldap_injection" -> "(?i)dircontext|ldap|search\\(|filter",
+        "xxe" -> "(?i)documentbuilderfactory|documentbuilder|saxparser|xmlreader|inputsource",
+        "http_response_splitting" -> "(?i)setheader\\(|addheader\\(|sendredirect\\(|setstatus\\(",
+        "reflection_injection" -> "(?i)class\\.forname|getmethod\\(|invoke\\(|newinstance\\(",
+        "el_injection" -> "(?i)expressionfactory|createvalueexpression\\(|createmethodexpression\\(|elprocessor|expressionevaluator|javax\\.el|jakarta\\.el|velocityengine|templateengine|mustache|handlebars"
+    )
+
+    val flowsBySinkJson = sinkPatterns.map { case (label, pattern) =>
+        val sinks = cpg.call.name(pattern)
+        val sinkCount = try { sinks.size } catch { case _: Throwable => 0 }
+        val flowCount = try {
+            sources.reachableByFlows(sinks).l.size
+        } catch {
+            case _: Throwable => 0
+        }
+        s""""$label":{"flows":$flowCount,"sources":$sourceCount,"sinks":$sinkCount}"""
+    }.mkString(",\n    ")
     
     // Build final JSON structure manually
     val output = new StringBuilder()
@@ -192,6 +223,10 @@ import java.nio.file.{Files, Paths}
     output.append(s"""  "nodes": [${nodesJson.mkString(",\n    ")}],\n""")
     output.append(s"""  "edges": [${allEdges.mkString(",\n    ")}],\n""")
     output.append(s"""  "methods": [${methodsJson.mkString(",\n    ")}],\n""")
+    output.append(s"""  "dataflow": {\n""")
+    output.append(s"""    "sources": $sourceCount,\n""")
+    output.append(s"""    "flows_by_sink": {\n    $flowsBySinkJson\n    }\n""")
+    output.append(s"""  },\n""")
     output.append(s"""  "statistics": {\n""")
     output.append(s"""    "num_nodes": ${nodesJson.size},\n""")
     output.append(s"""    "num_edges": ${allEdges.size},\n""")

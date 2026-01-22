@@ -4,18 +4,50 @@ Demonstrates Joern integration, CPG generation, and GNN processing
 """
 
 import os
+import shutil
 import logging
 import subprocess
 import json
 import tempfile
 from pathlib import Path
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple, Union
 import statistics
 import math
 import random
 from datetime import datetime
 from string import Template
 import re
+
+# Optional Tai-e integration
+try:
+    from .taie_integration import TaiEConfig
+    TAIE_AVAILABLE = True
+except Exception:  # pragma: no cover - optional dependency
+    TaiEConfig = None  # type: ignore
+    TAIE_AVAILABLE = False
+# Sink-specific gating engine
+try:
+    from .sink_gating_engine import SinkGatingEngine, EvidenceInstance, EvidenceType
+    SINK_GATING_AVAILABLE = True
+except Exception:  # pragma: no cover - optional module
+    SinkGatingEngine = None
+    EvidenceInstance = None
+    EvidenceType = None
+    SINK_GATING_AVAILABLE = False
+
+try:
+    from .framework_sink_registry import FrameworkSinkRegistry
+    FRAMEWORK_SINKS_AVAILABLE = True
+except Exception:  # pragma: no cover - optional module
+    FrameworkSinkRegistry = None
+    FRAMEWORK_SINKS_AVAILABLE = False
+
+try:
+    from .template_engine_analyzer import TemplateEngineAnalyzer
+    TEMPLATE_ENGINE_AVAILABLE = True
+except Exception:  # pragma: no cover - optional module
+    TemplateEngineAnalyzer = None
+    TEMPLATE_ENGINE_AVAILABLE = False
 
 # Comprehensive Taint Tracking - INTEGRATED (No external module)
 from dataclasses import dataclass, field
@@ -102,28 +134,27 @@ class JoernIntegrator:
             )
         
         try:
-            # Clean up any existing workspace cache to ensure fresh analysis
-            workspace_dir = Path.cwd() / 'workspace'
-            if workspace_dir.exists():
-                import shutil
-                try:
-                    shutil.rmtree(workspace_dir)
-                    self.logger.debug("🧹 Cleaned workspace cache")
-                except Exception as e:
-                    self.logger.warning(f"⚠️ Could not clean workspace: {e}")
-            
-            # Create temporary file for source code
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.java', delete=False) as f:
-                f.write(source_code)
-                temp_file = f.name
-            
-            # Create Joern script to analyze the file using safe key=value lines
-            script_content = '''
+            # Create temporary source directory for Joern importCode
+            with tempfile.TemporaryDirectory() as tmpdir:
+                base_dir = Path(tmpdir)
+                input_dir = base_dir / "input"
+                input_dir.mkdir(parents=True, exist_ok=True)
+
+                if source_path and Path(source_path).exists():
+                    java_name = Path(source_path).name
+                else:
+                    java_name = "snippet.java"
+
+                temp_source_path = input_dir / java_name
+                temp_source_path.write_text(source_code, encoding="utf-8")
+
+                # Create Joern script to analyze the file using safe key=value lines
+                script_content = '''
 import io.shiftleft.codepropertygraph.generated._
 import io.joern.console._
 
 workspace.reset
-importCode("PLACEHOLDER_TEMP_FILE")
+importCode("PLACEHOLDER_INPUT_DIR")
 
 val nodes = try cpg.all.l catch { case _: Throwable => List() }
 val methods = try cpg.method.l catch { case _: Throwable => List() }
@@ -150,45 +181,51 @@ println("EDGES=" + edgeCount)
 
 exit
 '''
-            script_content = script_content.replace("PLACEHOLDER_TEMP_FILE", temp_file)
-            
-            # Write script to temporary file
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.sc', delete=False) as f:
-                f.write(script_content)
-                script_file = f.name
-            
-            # Run Joern with the script
-            cmd = [self.joern_path, '--script', script_file]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=self.joern_timeout)
-            
-            # Clean up temporary files
-            os.unlink(temp_file)
-            os.unlink(script_file)
-            
-            if result.returncode == 0:
-                # Parse key=value output from Joern
-                output_lines = [ln.strip() for ln in result.stdout.strip().split('\n') if ln.strip()]
-                parsed = {}
-                for ln in output_lines:
-                    if '=' in ln:
-                        k, v = ln.split('=', 1)
-                        parsed[k.strip().upper()] = v.strip()
+                script_content = script_content.replace("PLACEHOLDER_INPUT_DIR", str(input_dir))
+
+                # Write script to temporary file
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.sc', delete=False) as f:
+                    f.write(script_content)
+                    script_file = f.name
+
                 try:
-                    cpg_data = {
-                        'nodes': int(parsed.get('NODES', '0') or '0'),
-                        'methods': int(parsed.get('METHODS', '0') or '0'),
-                        'calls': int(parsed.get('CALLS', '0') or '0'),
-                        'identifiers': int(parsed.get('IDENTIFIERS', '0') or '0'),
-                        'dfg': int(parsed.get('DFG', '0') or '0'),
-                        'edges': int(parsed.get('EDGES', '0') or '0'),
-                    }
-                    self.logger.info(f"✅ Joern CPG generated: {cpg_data}")
-                    return self._format_cpg_result(cpg_data, source_code)
-                except Exception as e:
-                    raise RuntimeError(f"Failed to parse Joern output: {e}; raw=\n{result.stdout}")
-            
-            # If we reach here, Joern execution failed
-            raise RuntimeError(f"Joern execution failed: {result.stderr or result.stdout}")
+                    # Run Joern with the script
+                    cmd = [self.joern_path, '--script', script_file]
+                    result = subprocess.run(
+                        cmd,
+                        capture_output=True,
+                        text=True,
+                        timeout=self.joern_timeout,
+                        cwd=base_dir,
+                    )
+
+                    if result.returncode == 0:
+                        # Parse key=value output from Joern
+                        output_lines = [ln.strip() for ln in result.stdout.strip().split('\n') if ln.strip()]
+                        parsed = {}
+                        for ln in output_lines:
+                            if '=' in ln:
+                                k, v = ln.split('=', 1)
+                                parsed[k.strip().upper()] = v.strip()
+                        try:
+                            cpg_data = {
+                                'nodes': int(parsed.get('NODES', '0') or '0'),
+                                'methods': int(parsed.get('METHODS', '0') or '0'),
+                                'calls': int(parsed.get('CALLS', '0') or '0'),
+                                'identifiers': int(parsed.get('IDENTIFIERS', '0') or '0'),
+                                'dfg': int(parsed.get('DFG', '0') or '0'),
+                                'edges': int(parsed.get('EDGES', '0') or '0'),
+                            }
+                            self.logger.info(f"✅ Joern CPG generated: {cpg_data}")
+                            return self._format_cpg_result(cpg_data, source_code)
+                        except Exception as e:
+                            raise RuntimeError(f"Failed to parse Joern output: {e}; raw=\n{result.stdout}")
+
+                    # If we reach here, Joern execution failed
+                    raise RuntimeError(f"Joern execution failed: {result.stderr or result.stdout}")
+                finally:
+                    if os.path.exists(script_file):
+                        os.unlink(script_file)
             
         except Exception as e:
             if "Joern is required" in str(e):
@@ -208,26 +245,36 @@ exit
         script_path = repo_root / "extract_cpg_for_gnn.sc"
         if not script_path.exists():
             raise RuntimeError(f"Missing Joern GNN script: {script_path}")
-
         temp_source_path = None
         try:
-            if source_path and Path(source_path).exists():
-                java_path = Path(source_path)
-            else:
-                with tempfile.NamedTemporaryFile(mode='w', suffix='.java', delete=False) as handle:
-                    handle.write(source_code)
-                    temp_source_path = Path(handle.name)
-                java_path = temp_source_path
-
             with tempfile.TemporaryDirectory() as tmpdir:
-                output_dir = Path(tmpdir)
+                base_dir = Path(tmpdir)
+                input_dir = base_dir / "input"
+                output_dir = base_dir / "output"
+                input_dir.mkdir(parents=True, exist_ok=True)
+                output_dir.mkdir(parents=True, exist_ok=True)
+
+                if source_path and Path(source_path).exists():
+                    java_name = Path(source_path).name
+                else:
+                    java_name = "snippet.java"
+
+                temp_source_path = input_dir / java_name
+                temp_source_path.write_text(source_code, encoding="utf-8")
+
                 cmd = [
                     self.joern_path,
                     "--script", str(script_path),
-                    "--param", f"cpgFile={java_path}",
+                    "--param", f"cpgFile={input_dir}",
                     "--param", f"outputDir={output_dir}",
                 ]
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=self.joern_timeout)
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=self.joern_timeout,
+                    cwd=base_dir,
+                )
                 if result.returncode != 0:
                     raise RuntimeError(result.stderr or result.stdout)
 
@@ -296,6 +343,10 @@ class VulnerabilityDetector:
         # XXE patterns
         if self._detect_xxe(source_code):
             vulnerabilities.append('xxe')
+
+        # SSRF patterns
+        if self._detect_ssrf(source_code):
+            vulnerabilities.append('ssrf')
         
         # Weak Crypto patterns
         if self._detect_weak_crypto(source_code):
@@ -304,6 +355,14 @@ class VulnerabilityDetector:
         # Deserialization patterns
         if self._detect_deserialization(source_code):
             vulnerabilities.append('deserialization')
+
+        # XPath Injection patterns
+        if self._detect_xpath_injection(source_code):
+            vulnerabilities.append('xpath_injection')
+
+        # ScriptEngine eval injection (mapped to EL injection/CWE-94)
+        if self._detect_script_engine_injection(source_code):
+            vulnerabilities.append('el_injection')
         
         # Hardcoded credentials patterns
         if self._detect_hardcoded_credentials(source_code):
@@ -425,6 +484,14 @@ class VulnerabilityDetector:
         for pattern in file_construction_patterns:
             if re.search(pattern, code):
                 return True
+
+        # Pattern 3: Zip Slip (ZipEntry name used directly in output path)
+        has_zip = 'ZipInputStream' in code or 'ZipEntry' in code
+        if has_zip:
+            if re.search(r'new\s+File\s*\(\s*\w+\s*,\s*entry\.getName\(\)\s*\)', code):
+                return True
+            if re.search(r'Paths\.get\s*\(\s*\w+\s*,\s*entry\.getName\(\)\s*\)', code):
+                return True
         
         return False
     
@@ -446,6 +513,7 @@ class VulnerabilityDetector:
     
     def _detect_ldap_injection(self, code: str) -> bool:
         """Detect LDAP injection patterns"""
+        import re
         ldap_patterns = [
             'LDAP injection vulnerability',
             '(uid=',
@@ -459,7 +527,14 @@ class VulnerabilityDetector:
         ]
         has_ldap_context = any(pattern in code for pattern in ['LDAP', 'ldap', 'search(', 'filter'])
         has_concatenation = '+' in code and '"' in code
-        return has_ldap_context and has_concatenation
+        if has_ldap_context and has_concatenation:
+            return True
+
+        # JNDI lookup injection often uses InitialContext.lookup(userInput)
+        has_jndi = 'InitialContext' in code or 'Context' in code
+        has_lookup = 'lookup(' in code
+        has_lookup_var = bool(re.search(r'lookup\s*\(\s*[A-Za-z_]\w*\s*\)', code))
+        return has_jndi and has_lookup and has_lookup_var
     
     def _detect_el_injection(self, code: str) -> bool:
         """Detect EL (Expression Language) injection patterns (CWE-94)"""
@@ -473,7 +548,14 @@ class VulnerabilityDetector:
             'createValueExpression',
             'createMethodExpression',
             'StandardELContext',
-            'EvaluationContext'
+            'EvaluationContext',
+            'ELProcessor',
+            'ELManager',
+            'ExpressionEvaluator',
+            'PageContextImpl',
+            'proprietaryEvaluate',
+            'javax.el',
+            'jakarta.el'
         ]
         
         has_el_api = any(pattern in code for pattern in el_api_patterns)
@@ -507,6 +589,49 @@ class VulnerabilityDetector:
         has_xml_parsing = any(pattern in code for pattern in xxe_patterns)
         missing_security = 'setFeature' not in code and 'setExpandEntityReferences' not in code
         return has_xml_parsing and missing_security
+
+    def _detect_ssrf(self, code: str) -> bool:
+        """Detect SSRF patterns using URL/URLConnection with user-controlled input"""
+        import re
+
+        url_indicators = [
+            'URL',
+            'URLConnection',
+            'HttpURLConnection',
+            'openConnection',
+            'openStream',
+            'getInputStream'
+        ]
+        has_url_api = any(indicator in code for indicator in url_indicators)
+        if not has_url_api:
+            return False
+
+        # new URL(userInput) or new URL("http://" + host)
+        url_variable = re.search(r'new\s+URL\s*\(\s*[^"\']+?\)', code)
+        url_concat = re.search(r'new\s+URL\s*\(\s*\"[^\"]*\"\s*\+\s*\w+', code)
+        has_open = 'openConnection' in code or 'openStream' in code or 'getInputStream' in code
+        return has_open and (url_variable or url_concat)
+
+    def _detect_xpath_injection(self, code: str) -> bool:
+        """Detect XPath injection patterns"""
+        import re
+
+        has_xpath = 'XPathFactory' in code or 'XPath' in code
+        has_eval = 'compile(' in code or 'evaluate(' in code
+        has_concat = '+' in code and ('@' in code or 'XPath' in code)
+        expr_concat = re.search(r'\"[^\"]*\"\s*\+\s*\w+', code)
+        return has_xpath and has_eval and (has_concat or expr_concat)
+
+    def _detect_script_engine_injection(self, code: str) -> bool:
+        """Detect ScriptEngine eval injection patterns"""
+        import re
+
+        has_engine = 'ScriptEngine' in code or 'ScriptEngineManager' in code or 'getEngineByName' in code
+        if not has_engine:
+            return False
+        has_eval_var = re.search(r'\.eval\s*\(\s*[A-Za-z_]\w*\s*\)', code)
+        has_eval_concat = re.search(r'\.eval\s*\([^)]*\+', code)
+        return bool(has_eval_var or has_eval_concat)
     
     def _detect_weak_crypto(self, code: str) -> bool:
         """Detect weak cryptography patterns"""
@@ -530,6 +655,7 @@ class VulnerabilityDetector:
             'ObjectInputStream',
             'readObject()',
             'ByteArrayInputStream',
+            'XMLDecoder',
             'Serializable',
             'deserialize'
         ]
@@ -1231,8 +1357,32 @@ class BayesianUncertaintyLayer:
 class IntegratedGNNFramework:
     """Integrated GNN Framework for Vulnerability Detection - NO FALLBACKS"""
     
-    def __init__(self, enable_ensemble=False, enable_advanced_features=False, enable_spatial_gnn=True,
-                 enable_explanations=False, joern_timeout=480, gnn_checkpoint: Optional[str] = None):
+    def __init__(
+        self,
+        enable_ensemble: bool = False,
+        enable_advanced_features: bool = False,
+        enable_spatial_gnn: bool = True,
+        enable_explanations: bool = False,
+        joern_timeout: int = 480,
+        gnn_checkpoint: Optional[Union[str, List[str]]] = None,
+        gnn_weight: float = 0.6,
+        gnn_confidence_threshold: float = 0.5,
+        gnn_temperature: float = 1.0,
+        gnn_ensemble: int = 1,
+        enable_joern_dataflow: bool = False,
+        enable_tai_e: bool = False,
+        tai_e_home: Optional[str] = None,
+        tai_e_cs: str = "1-obj",
+        tai_e_main: Optional[str] = None,
+        tai_e_timeout: Optional[int] = 300,
+        tai_e_only_app: bool = True,
+        tai_e_allow_phantom: bool = True,
+        tai_e_prepend_jvm: bool = True,
+        tai_e_java_version: Optional[int] = None,
+        tai_e_classpath: Optional[str] = None,
+        tai_e_enable_taint: bool = False,
+        tai_e_taint_config: Optional[str] = None,
+    ):
         self.logger = logging.getLogger(__name__)
         self.logger.info("🚀 Initializing Bean Vulnerable Framework")
         
@@ -1241,21 +1391,59 @@ class IntegratedGNNFramework:
         self.enable_spatial_gnn = enable_spatial_gnn
         self.enable_explanations = enable_explanations
         self.joern_timeout = joern_timeout
+        self.gnn_weight = self._normalize_gnn_weight(gnn_weight)
+        self.gnn_confidence_threshold = self._normalize_gnn_threshold(gnn_confidence_threshold)
+        self.gnn_temperature = self._normalize_gnn_temperature(gnn_temperature)
+        self.gnn_ensemble = max(int(gnn_ensemble), 1)
         self.gnn_checkpoint = gnn_checkpoint
+        self.gnn_checkpoint_paths = self._normalize_checkpoint_paths(gnn_checkpoint)
         self.gnn_weights_loaded = False
+        self.gnn_weights_loaded_count = 0
         self._gnn_trace_enabled = os.getenv("BEAN_VULN_TRACE_GNN", "").lower() in {"1", "true", "yes", "on"}
         self._gnn_forward_called = False
+        self.spatial_gnn_models: List[Any] = []
+        env_joern_dataflow = os.getenv("BEAN_VULN_JOERN_DATAFLOW", "").lower() in {"1", "true", "yes", "on"}
+        self.enable_joern_dataflow = bool(enable_joern_dataflow) or env_joern_dataflow
+        self.tai_e_config = None
+        if enable_tai_e:
+            if TAIE_AVAILABLE:
+                self.tai_e_config = TaiEConfig(
+                    enabled=True,
+                    tai_e_home=tai_e_home,
+                    cs=tai_e_cs,
+                    main_class=tai_e_main,
+                    timeout=tai_e_timeout,
+                    only_app=tai_e_only_app,
+                    implicit_entries=True,
+                    allow_phantom=tai_e_allow_phantom,
+                    prepend_jvm=tai_e_prepend_jvm,
+                    java_version=tai_e_java_version,
+                    classpath=tai_e_classpath,
+                    enable_taint=bool(tai_e_enable_taint),
+                    taint_config=tai_e_taint_config,
+                )
+            else:
+                self.logger.warning("⚠️ Tai-e integration requested but not available")
         
         # Initialize components
         self.joern_integrator = JoernIntegrator()
         self.joern_integrator.joern_timeout = self.joern_timeout
         self.vulnerability_detector = VulnerabilityDetector()
         self.bayesian_layer = BayesianUncertaintyLayer()
+        self.sink_gating_engine = SinkGatingEngine() if SINK_GATING_AVAILABLE else None
+        if self.sink_gating_engine:
+            self.logger.info("✅ Sink-specific gating engine initialized")
+        self.framework_sink_registry = FrameworkSinkRegistry() if FRAMEWORK_SINKS_AVAILABLE else None
+        if self.framework_sink_registry:
+            self.logger.info("✅ Framework sink registry initialized")
+        self.template_engine_analyzer = TemplateEngineAnalyzer() if TEMPLATE_ENGINE_AVAILABLE else None
+        if self.template_engine_analyzer:
+            self.logger.info("✅ Template engine analyzer initialized")
         
         # Initialize Comprehensive Taint Tracking
         try:
             from .comprehensive_taint_tracking import ComprehensiveTaintTracker
-            self.taint_tracker = ComprehensiveTaintTracker()
+            self.taint_tracker = ComprehensiveTaintTracker(tai_e_config=self.tai_e_config)
             self.logger.info("✅ Comprehensive Taint Tracking initialized (external module)")
         except ImportError:
             self.taint_tracker = None
@@ -1290,10 +1478,36 @@ class IntegratedGNNFramework:
                         'enable_attention_visualization': True,
                         'enable_counterfactual_analysis': True
                     }
-                    self.spatial_gnn_model = create_spatial_gnn_model(gnn_config)
-                    self.logger.info("⚠️ Next-Generation Spatial GNN initialized (research config; inference enabled)")
-                    if self.gnn_checkpoint:
-                        self._load_spatial_gnn_checkpoint(self.gnn_checkpoint)
+                    checkpoint_paths = list(self.gnn_checkpoint_paths)
+                    if checkpoint_paths and self.gnn_ensemble > 0:
+                        if len(checkpoint_paths) > self.gnn_ensemble:
+                            self.logger.warning(
+                                f"⚠️ {len(checkpoint_paths)} checkpoints provided; limiting to {self.gnn_ensemble}."
+                            )
+                            checkpoint_paths = checkpoint_paths[: self.gnn_ensemble]
+                        elif len(checkpoint_paths) < self.gnn_ensemble:
+                            self.logger.warning(
+                                f"⚠️ gnn_ensemble={self.gnn_ensemble} but only {len(checkpoint_paths)} checkpoints provided."
+                            )
+
+                    if checkpoint_paths:
+                        for checkpoint_path in checkpoint_paths:
+                            model = create_spatial_gnn_model(gnn_config)
+                            if self._load_spatial_gnn_checkpoint(checkpoint_path, model=model):
+                                self.spatial_gnn_models.append(model)
+                        if not self.spatial_gnn_models:
+                            self.logger.warning("⚠️ No Spatial GNN checkpoints loaded; disabling inference.")
+                        else:
+                            self.spatial_gnn_model = self.spatial_gnn_models[0]
+                            self.gnn_weights_loaded = True
+                            self.gnn_weights_loaded_count = len(self.spatial_gnn_models)
+                            self.logger.info(
+                                f"✅ Next-Generation Spatial GNN initialized with {self.gnn_weights_loaded_count} checkpoint(s)"
+                            )
+                    else:
+                        self.spatial_gnn_model = create_spatial_gnn_model(gnn_config)
+                        self.spatial_gnn_models = [self.spatial_gnn_model]
+                        self.logger.info("✅ Next-Generation Spatial GNN initialized (research config; inference enabled)")
                 else:
                     self.logger.warning("⚠️ PyTorch Geometric not available - Spatial GNN disabled")
             except Exception as e:
@@ -1303,6 +1517,90 @@ class IntegratedGNNFramework:
         self._enable_gnn_forward_trace()
         
         self.logger.info("✅ Bean Vulnerable Framework initialized")
+
+    def _normalize_checkpoint_paths(self, gnn_checkpoint: Optional[Union[str, List[str]]]) -> List[str]:
+        if not gnn_checkpoint:
+            return []
+        if isinstance(gnn_checkpoint, str):
+            raw_items: List[str] = [gnn_checkpoint]
+        elif isinstance(gnn_checkpoint, list):
+            raw_items = [item for item in gnn_checkpoint if item]
+        else:
+            return []
+        paths: List[str] = []
+        for item in raw_items:
+            if not isinstance(item, str):
+                continue
+            parts = [part.strip() for part in item.split(",") if part.strip()]
+            paths.extend(parts)
+        return paths
+
+    def _normalize_gnn_weight(self, weight: float) -> float:
+        try:
+            value = float(weight)
+        except Exception:
+            value = 0.6
+        if value < 0.0 or value > 1.0:
+            self.logger.warning(f"⚠️ gnn_weight out of range ({value}); clamping to [0, 1].")
+            value = max(0.0, min(1.0, value))
+        return value
+
+    def _normalize_gnn_threshold(self, threshold: Optional[float]) -> Optional[float]:
+        if threshold is None:
+            return None
+        try:
+            value = float(threshold)
+        except Exception:
+            value = 0.5
+        if value < 0.0 or value > 1.0:
+            self.logger.warning(f"⚠️ gnn_confidence_threshold out of range ({value}); clamping to [0, 1].")
+            value = max(0.0, min(1.0, value))
+        return value
+
+    def _normalize_gnn_temperature(self, temperature: float) -> float:
+        try:
+            value = float(temperature)
+        except Exception:
+            value = 1.0
+        if value <= 0.0:
+            self.logger.warning(f"⚠️ gnn_temperature must be > 0; using 1.0 (got {value}).")
+            value = 1.0
+        return value
+
+    def _calibrate_probability(self, probability: float) -> float:
+        if self.gnn_temperature == 1.0:
+            return probability
+        eps = 1e-6
+        prob = min(max(probability, eps), 1.0 - eps)
+        logit = math.log(prob / (1.0 - prob))
+        scaled = logit / self.gnn_temperature
+        return 1.0 / (1.0 + math.exp(-scaled))
+
+    def _extract_gnn_confidence(self, outputs: Any) -> Tuple[Optional[float], str, Optional[float]]:
+        if not isinstance(outputs, dict):
+            return None, "unsupported", None
+        confidence_tensor = outputs.get("confidence")
+        if confidence_tensor is not None:
+            try:
+                raw_conf = float(confidence_tensor.view(-1)[0].item())
+                return self._calibrate_probability(raw_conf), "confidence_head", raw_conf
+            except Exception:
+                return None, "confidence_head_error", None
+        binary_logits = outputs.get("binary_logits")
+        if binary_logits is not None:
+            try:
+                import torch
+                scaled_logits = binary_logits / self.gnn_temperature
+                scaled_probs = torch.softmax(scaled_logits, dim=-1)[..., 1]
+                raw_probs = torch.softmax(binary_logits, dim=-1)[..., 1]
+                return (
+                    float(scaled_probs.view(-1)[0].item()),
+                    "binary_logits",
+                    float(raw_probs.view(-1)[0].item()),
+                )
+            except Exception:
+                return None, "binary_logits_error", None
+        return None, "missing", None
     
     def _enable_gnn_forward_trace(self) -> None:
         if not self._gnn_trace_enabled:
@@ -1334,22 +1632,24 @@ class IntegratedGNNFramework:
             self.spatial_gnn_model._beanvuln_gnn_trace_enabled = True
             self.logger.info("🧠 GNN forward wrapper attached.")
 
-    def _load_spatial_gnn_checkpoint(self, checkpoint_path: str) -> None:
-        if not self.spatial_gnn_model:
-            return
+    def _load_spatial_gnn_checkpoint(self, checkpoint_path: str, model: Optional[Any] = None) -> bool:
+        target_model = model or self.spatial_gnn_model
+        if not target_model:
+            return False
         checkpoint = Path(checkpoint_path)
         if not checkpoint.exists():
             self.logger.warning(f"⚠️ Spatial GNN checkpoint not found: {checkpoint}")
-            return
+            return False
         try:
             import torch
             payload = torch.load(str(checkpoint), map_location="cpu")
             state_dict = payload.get("model_state_dict", payload) if isinstance(payload, dict) else payload
-            self.spatial_gnn_model.load_state_dict(state_dict)
-            self.gnn_weights_loaded = True
+            target_model.load_state_dict(state_dict)
             self.logger.info(f"✅ Loaded Spatial GNN checkpoint: {checkpoint}")
+            return True
         except Exception as exc:
             self.logger.warning(f"⚠️ Failed to load Spatial GNN checkpoint: {exc}")
+            return False
 
     def _cpg_to_pyg_data(self, cpg_structure: Dict[str, Any]) -> Optional[Any]:
         try:
@@ -1429,59 +1729,106 @@ class IntegratedGNNFramework:
         data.node_tokens = node_tokens
         return data
 
-    def _run_spatial_gnn_inference(self, source_code: str, source_path: Optional[str]) -> Optional[Dict[str, Any]]:
-        if not self.spatial_gnn_model:
+    def _run_spatial_gnn_inference(
+        self,
+        source_code: str,
+        source_path: Optional[str],
+        cpg_structure: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        models = self.spatial_gnn_models or ([self.spatial_gnn_model] if self.spatial_gnn_model else [])
+        if not models:
             return None
         try:
-            cpg_structure = self.joern_integrator.generate_cpg_structure(source_code, source_path)
+            if cpg_structure is None:
+                cpg_structure = self.joern_integrator.generate_cpg_structure(source_code, source_path)
             data = self._cpg_to_pyg_data(cpg_structure)
             if data is None:
                 return None
 
             import torch
-            self.spatial_gnn_model.eval()
-            try:
-                device = next(self.spatial_gnn_model.parameters()).device
-            except StopIteration:
-                device = torch.device("cpu")
-
-            x = data.x.to(device)
-            edge_index = data.edge_index.to(device)
-            edge_type = data.edge_type.to(device)
+            confidences: List[float] = []
+            raw_confidences: List[float] = []
+            confidence_sources: List[str] = []
+            binary_probabilities: List[float] = []
+            predicted_vulnerable_votes: List[bool] = []
+            predicted_types: List[str] = []
+            errors: List[str] = []
 
             node_tokens = getattr(data, "node_tokens", None)
-            with torch.no_grad():
-                outputs = self.spatial_gnn_model(
-                    x, edge_index, edge_type, node_tokens=node_tokens
-                )
-
-            self._gnn_forward_called = True
-
-            gnn_conf = None
-            if isinstance(outputs, dict) and "confidence" in outputs:
+            for model in models:
                 try:
-                    gnn_conf = float(outputs["confidence"].view(-1)[0].item())
-                except Exception:
-                    gnn_conf = None
+                    model.eval()
+                    try:
+                        device = next(model.parameters()).device
+                    except StopIteration:
+                        device = torch.device("cpu")
+
+                    x = data.x.to(device)
+                    edge_index = data.edge_index.to(device)
+                    edge_type = data.edge_type.to(device)
+
+                    with torch.no_grad():
+                        outputs = model(
+                            x, edge_index, edge_type, node_tokens=node_tokens
+                        )
+
+                    self._gnn_forward_called = True
+
+                    conf, source, raw_conf = self._extract_gnn_confidence(outputs)
+                    if conf is not None:
+                        confidences.append(conf)
+                        raw_confidences.append(raw_conf if raw_conf is not None else conf)
+                        confidence_sources.append(source)
+
+                    binary_logits = outputs.get("binary_logits") if isinstance(outputs, dict) else None
+                    if binary_logits is not None:
+                        pred_class = int(torch.argmax(binary_logits, dim=-1).view(-1)[0].item())
+                        predicted_vulnerable_votes.append(pred_class == 1)
+                        prob = torch.softmax(binary_logits / self.gnn_temperature, dim=-1)[..., 1]
+                        binary_probabilities.append(float(prob.view(-1)[0].item()))
+
+                    multiclass_logits = outputs.get("multiclass_logits") if isinstance(outputs, dict) else None
+                    if multiclass_logits is not None:
+                        pred_type_id = int(torch.argmax(multiclass_logits, dim=-1).view(-1)[0].item())
+                        predicted_types.append(GNN_VULN_TYPE_ID_TO_NAME.get(pred_type_id, "unknown_gnn"))
+                except Exception as exc:
+                    errors.append(str(exc))
+                    continue
+
+            if not confidences:
+                return {"forward_ok": False, "error": "no_gnn_confidence", "errors": errors}
+
+            gnn_conf = statistics.mean(confidences)
+            gnn_uncertainty = statistics.pstdev(confidences) if len(confidences) > 1 else 0.0
 
             predicted_vuln = False
-            predicted_type = None
-            binary_logits = outputs.get("binary_logits") if isinstance(outputs, dict) else None
-            if binary_logits is not None:
-                pred_class = int(torch.argmax(binary_logits, dim=-1).item())
-                predicted_vuln = pred_class == 1
+            if predicted_vulnerable_votes:
+                votes = sum(1 for v in predicted_vulnerable_votes if v)
+                predicted_vuln = votes > (len(predicted_vulnerable_votes) / 2)
 
-            multiclass_logits = outputs.get("multiclass_logits") if isinstance(outputs, dict) else None
-            if multiclass_logits is not None:
-                pred_type_id = int(torch.argmax(multiclass_logits, dim=-1).item())
-                predicted_type = GNN_VULN_TYPE_ID_TO_NAME.get(pred_type_id, "unknown_gnn")
+            predicted_type = None
+            if predicted_types:
+                type_counts = defaultdict(int)
+                for vuln_type in predicted_types:
+                    type_counts[vuln_type] += 1
+                predicted_type = max(type_counts.items(), key=lambda x: x[1])[0]
 
             stats = cpg_structure.get("statistics") or {}
             return {
                 "forward_ok": True,
-                "gnn_confidence": gnn_conf,
+                "gnn_confidence": float(gnn_conf),
+                "gnn_uncertainty": float(gnn_uncertainty),
                 "predicted_vulnerable": predicted_vuln,
                 "predicted_type": predicted_type,
+                "ensemble": {
+                    "models": len(models),
+                    "used": len(confidences),
+                    "confidence_sources": confidence_sources,
+                    "confidences": confidences,
+                    "raw_confidences": raw_confidences,
+                    "binary_probabilities": binary_probabilities,
+                    "errors": errors,
+                },
                 "cpg_stats": {
                     "num_nodes": stats.get("num_nodes", len(cpg_structure.get("nodes", []))),
                     "num_edges": stats.get("num_edges", len(cpg_structure.get("edges", []))),
@@ -1491,10 +1838,36 @@ class IntegratedGNNFramework:
             self.logger.warning(f"⚠️ Spatial GNN inference failed: {exc}")
             return {"forward_ok": False, "error": str(exc)}
 
+    def _cpg_result_from_structure(self, cpg_structure: Dict[str, Any], source_code: str) -> Dict[str, Any]:
+        nodes = cpg_structure.get("nodes", []) or []
+        edges = cpg_structure.get("edges", []) or []
+        methods = cpg_structure.get("methods", []) or []
+        stats = cpg_structure.get("statistics") or {}
+
+        identifiers = sum(1 for node in nodes if node.get("node_type") == "IDENTIFIER")
+        dfg_edges = stats.get(
+            "num_dfg_edges",
+            sum(1 for edge in edges if edge.get("edge_type") == "DFG"),
+        )
+        call_edges = stats.get(
+            "num_call_edges",
+            sum(1 for edge in edges if edge.get("edge_type") == "CALL"),
+        )
+
+        cpg_data = {
+            "nodes": stats.get("num_nodes", len(nodes)),
+            "methods": stats.get("num_methods", len(methods)),
+            "calls": call_edges,
+            "identifiers": identifiers,
+            "dfg": dfg_edges,
+            "edges": stats.get("num_edges", len(edges)),
+        }
+        return self.joern_integrator._format_cpg_result(cpg_data, source_code)
+
     def _combine_confidence(self, heuristic_conf: float, gnn_conf: Optional[float], gnn_trustworthy: bool) -> float:
         if gnn_conf is None or not gnn_trustworthy:
             return heuristic_conf
-        return 0.5 * heuristic_conf + 0.5 * gnn_conf
+        return (1.0 - self.gnn_weight) * heuristic_conf + self.gnn_weight * gnn_conf
 
     def analyze_code(self, source_code: str, source_path: Optional[str] = None, _internal_call: bool = False) -> Dict[str, Any]:
         """Analyze source code using the complete pipeline with Bayesian uncertainty"""
@@ -1502,22 +1875,67 @@ class IntegratedGNNFramework:
         if self._gnn_trace_enabled:
             self._gnn_forward_called = False
         
-        # Step 1: Generate CPG using Joern
-        self.logger.info("📊 Generating CPG...")
-        cpg_result = self.joern_integrator.generate_cpg(source_code, source_path)
+        # Step 1: Generate CPG using Joern (reuse full structure if GNN enabled)
+        cpg_structure = None
+        if self.spatial_gnn_model:
+            try:
+                self.logger.info("📊 Generating CPG structure for GNN...")
+                cpg_structure = self.joern_integrator.generate_cpg_structure(source_code, source_path)
+                cpg_result = self._cpg_result_from_structure(cpg_structure, source_code)
+            except Exception as exc:
+                self.logger.warning(f"⚠️ CPG structure extraction failed; falling back: {exc}")
+                cpg_structure = None
+                self.logger.info("📊 Generating CPG summary...")
+                cpg_result = self.joern_integrator.generate_cpg(source_code, source_path)
+        else:
+            self.logger.info("📊 Generating CPG summary...")
+            cpg_result = self.joern_integrator.generate_cpg(source_code, source_path)
+            if self.enable_joern_dataflow:
+                try:
+                    self.logger.info("📊 Generating CPG structure for Joern dataflow...")
+                    cpg_structure = self.joern_integrator.generate_cpg_structure(source_code, source_path)
+                except Exception as exc:
+                    self.logger.warning(f"⚠️ Joern dataflow extraction failed: {exc}")
+                    cpg_structure = None
         
         # Step 1.5: Comprehensive Taint Tracking & Alias Analysis
         taint_result = {}
         if self.taint_tracker:
             self.logger.info("🔬 Running comprehensive taint tracking (3-tier detection)...")
-            taint_result = self.taint_tracker.analyze_java_code(source_code)
+            taint_result = self.taint_tracker.analyze_java_code(source_code, source_path=source_path)
             self.logger.info(f"✅ Taint tracking complete: {taint_result.get('tainted_variables_count', 0)} tainted, "
                            f"{taint_result.get('tainted_fields_count', 0)} tainted fields, "
                            f"{taint_result.get('taint_flows_count', 0)} flows")
+
+        joern_dataflow = {}
+        if cpg_structure and isinstance(cpg_structure, dict):
+            joern_dataflow = cpg_structure.get("dataflow") or {}
+            if joern_dataflow and isinstance(taint_result, dict):
+                taint_result["joern_dataflow"] = joern_dataflow
         
         # Step 2: Detect vulnerability patterns
         self.logger.info("🔍 Detecting vulnerability patterns...")
         vulnerabilities = self.vulnerability_detector.detect_patterns(source_code)
+
+        framework_sinks = {}
+        if self.framework_sink_registry:
+            try:
+                framework_sinks = self.framework_sink_registry.analyze_code(source_code)
+                if isinstance(taint_result, dict):
+                    taint_result["framework_sinks"] = framework_sinks
+            except Exception as exc:
+                self.logger.warning(f"⚠️ Framework sink analysis failed: {exc}")
+
+        template_engine_analysis = {}
+        if self.template_engine_analyzer:
+            try:
+                template_engine_analysis = self.template_engine_analyzer.analyze(source_code)
+                if isinstance(taint_result, dict):
+                    taint_result["template_engine_analysis"] = template_engine_analysis
+            except Exception as exc:
+                self.logger.warning(f"⚠️ Template engine analysis failed: {exc}")
+
+        vulnerabilities, taint_gating = self._apply_taint_gating(vulnerabilities, source_code, taint_result)
         
         # Step 3: Heuristic scoring with Bayesian uncertainty
         self.logger.info("🧠 Processing with heuristic scoring...")
@@ -1533,14 +1951,22 @@ class IntegratedGNNFramework:
         gnn_inference = None
         if self.spatial_gnn_model:
             self.logger.info("🧠 Running spatial GNN inference...")
-            gnn_inference = self._run_spatial_gnn_inference(source_code, source_path)
+            gnn_inference = self._run_spatial_gnn_inference(
+                source_code, source_path, cpg_structure=cpg_structure
+            )
 
         gnn_forward_ok = bool(gnn_inference and gnn_inference.get("forward_ok"))
         gnn_confidence = gnn_inference.get("gnn_confidence") if gnn_forward_ok else None
+        gnn_uncertainty = gnn_inference.get("gnn_uncertainty") if gnn_forward_ok else None
         gnn_trustworthy = gnn_forward_ok and self.gnn_weights_loaded
         final_confidence = self._combine_confidence(
             heuristic_result["confidence"], gnn_confidence, gnn_trustworthy
         )
+        threshold_applied = False
+        threshold_passed = True
+        if gnn_trustworthy and self.gnn_confidence_threshold is not None:
+            threshold_applied = True
+            threshold_passed = final_confidence >= self.gnn_confidence_threshold
         if gnn_trustworthy:
             analysis_method = "gnn_inference_with_heuristic"
         elif gnn_forward_ok:
@@ -1548,15 +1974,32 @@ class IntegratedGNNFramework:
         else:
             analysis_method = "pattern_heuristic_with_uncertainty"
         
+        gnn_predicted_allowed = False
+        gnn_predicted_type = None
+        if gnn_trustworthy and gnn_inference.get("predicted_vulnerable"):
+            gnn_predicted_type = gnn_inference.get("predicted_type")
+            if gnn_predicted_type:
+                gated_predicted, _ = self._apply_taint_gating(
+                    [gnn_predicted_type], source_code, taint_result
+                )
+                gnn_predicted_allowed = len(gated_predicted) > 0
+            else:
+                gnn_predicted_allowed = True
+        
         # Step 4: Select primary vulnerability based on severity
         primary_vuln = self._select_primary_vulnerability_by_severity(vulnerabilities, source_code)
         
         vulnerability_detected = len(vulnerabilities) > 0
-        if gnn_trustworthy and gnn_inference.get("predicted_vulnerable"):
+        if gnn_trustworthy and gnn_inference.get("predicted_vulnerable") and gnn_predicted_allowed:
             vulnerability_detected = True
 
-        if primary_vuln == 'none' and gnn_trustworthy and gnn_inference.get("predicted_vulnerable"):
-            predicted_type = gnn_inference.get("predicted_type")
+        pre_threshold_detected = vulnerability_detected
+        if threshold_applied and not threshold_passed:
+            vulnerability_detected = False
+            primary_vuln = 'none'
+
+        if primary_vuln == 'none' and gnn_trustworthy and gnn_inference.get("predicted_vulnerable") and gnn_predicted_allowed:
+            predicted_type = gnn_predicted_type or gnn_inference.get("predicted_type")
             if predicted_type and predicted_type != "none":
                 primary_vuln = predicted_type
 
@@ -1568,6 +2011,7 @@ class IntegratedGNNFramework:
             'traditional_confidence': heuristic_result['traditional_confidence'],
             'bayesian_confidence': heuristic_result['bayesian_confidence'],
             'gnn_confidence': gnn_confidence,
+            'gnn_uncertainty': gnn_uncertainty,
             'vulnerabilities_found': vulnerabilities,
             'cpg': cpg_result['cpg'],
             'joern_available': cpg_result['joern_available'],
@@ -1578,21 +2022,37 @@ class IntegratedGNNFramework:
             'routing_decision': heuristic_result['routing_decision'],
             'requires_manual_review': heuristic_result['routing_decision'].get('requires_attention', False),
             'evidence': heuristic_result.get('evidence', {}),
+            'taint_gating': taint_gating,
             'graph_sanity': heuristic_result.get('graph_sanity', {}),
             'taint_tracking': taint_result,
+            'joern_dataflow': joern_dataflow,
+            'framework_sinks': framework_sinks,
+            'template_engine_analysis': template_engine_analysis,
             'input': source_path,  # Add input path for HTML report generation
             'source_code': source_code  # Add source code for CF explainer
         }
         final_result['gnn_forward_called'] = gnn_forward_ok
+        final_result['gnn_threshold'] = {
+            'applied': threshold_applied,
+            'passed': threshold_passed,
+            'threshold': self.gnn_confidence_threshold,
+            'score': final_confidence,
+            'pre_threshold_detected': pre_threshold_detected,
+        }
         
         # Spatial GNN status (initialized but not used in scoring pipeline)
         final_result['spatial_gnn'] = {
             'enabled': self.enable_spatial_gnn,
-            'initialized': self.spatial_gnn_model is not None,
+            'initialized': bool(self.spatial_gnn_models or self.spatial_gnn_model),
             'used_in_scoring': gnn_trustworthy,
             'note': 'Spatial GNN inference executed' if gnn_forward_ok else 'Model initialization only; inference not executed',
             'forward_called': gnn_forward_ok,
-            'weights_loaded': self.gnn_weights_loaded
+            'weights_loaded': self.gnn_weights_loaded,
+            'weights_loaded_count': self.gnn_weights_loaded_count,
+            'ensemble_size': len(self.spatial_gnn_models) if self.spatial_gnn_models else (1 if self.spatial_gnn_model else 0),
+            'gnn_weight': self.gnn_weight,
+            'gnn_temperature': self.gnn_temperature,
+            'gnn_confidence_threshold': self.gnn_confidence_threshold,
         }
         if self._gnn_trace_enabled:
             final_result['spatial_gnn']['trace_enabled'] = True
@@ -1627,12 +2087,14 @@ class IntegratedGNNFramework:
             'command_injection': 90,
             'deserialization': 85,
             'xxe': 85,
+            'ssrf': 84,
             'el_injection': 83,  # CWE-94 - High severity (code execution via EL evaluation)
             'http_response_splitting': 82,  # CWE-113 - High severity (can lead to XSS, cache poisoning)
             'reflection_injection': 80,  # CWE-470 - High severity (arbitrary method invocation)
             'session_fixation': 78,  # CWE-384 - High severity (authentication bypass)
             'resource_leak': 76,  # CWE-404, CWE-772 - High severity (memory exhaustion, DOS)
             'ldap_injection': 75,
+            'xpath_injection': 74,
             'race_condition': 72,  # CWE-362, CWE-366, CWE-367 - High severity (data corruption, TOCTOU)
             'xss': 70,
             'path_traversal': 70,
@@ -1681,16 +2143,101 @@ class IntegratedGNNFramework:
             "esapi.encoder", "htmlescape", "htmlutils.htmlescape", "encodeforhtml",
             "encodeforurl", "encodeforjavascript",
         ]
+        sink_sanitizer_markers = {
+            "sql_injection": [
+                "preparedstatement", "createpreparedstatement", "setstring(", "setint(",
+                "setlong(", "setobject(", "setparameter(", "namedparameterjdbctemplate",
+                "jdbcTemplate.query", "queryforobject(", "createquery(", "setnull(",
+            ],
+            "xss": [
+                "stringescapeutils.escapehtml", "stringescapeutils.escapehtml4", "stringescapeutils.escapehtml5",
+                "htmlescape", "htmlutils.htmlescape", "encodeforhtml", "encodeforhtmlattribute",
+                "encodeforjavascript", "encodeforurl", "esapi.encoder().encodeforhtml",
+                "owasp.encoder", "encode.forhtml", "encode.forhtmlattribute",
+                "jsoup.clean(", "policyfactory.sanitize", "sanitizer.sanitize", "bleach.clean",
+            ],
+            "path_traversal": [
+                "getcanonicalpath()", "getcanonicalfile()", "torealpath()", "normalize()", "path.normalize",
+                "paths.get(", ".normalize()", ".torealpath(",
+            ],
+            "ldap_injection": [
+                "ldapencoder.encodefilter", "ldapencoder.encodedn", "rdn.escapevalue",
+                "escapeldapsearchfilter", "escapedn", "ldapname(",
+            ],
+            "xxe": [
+                "xmlconstants.feature_secure_processing",
+                "disallow-doctype-decl",
+                "external-general-entities",
+                "external-parameter-entities",
+                "setxincludeaware(false",
+                "setexpandentityreferences(false",
+            ],
+            "http_response_splitting": [
+                "encodeurl(", "encoderedirecturl(", "urlencoder.encode", "encodeforurl", "encodeforuricomponent",
+            ],
+            "command_injection": [
+                "processbuilder(", ".command(", "list.of(", "arrays.aslist(",
+            ],
+        }
         sink_markers = {
             "sql_injection": ["executequery(", "executeupdate(", "execute(", "preparestatement("],
             "command_injection": ["runtime.getruntime().exec", "runtime.exec", "processbuilder", "new processbuilder", ".start("],
             "path_traversal": ["new file(", "fileinputstream(", "filereader(", "files.read", "files.write", "paths.get("],
-            "xss": ["getwriter().print", "getwriter().println", "getwriter().write", "response.getwriter"],
-            "ldap_injection": ["dircontext", "ldap", "search(", "filter"],
+            "xss": [
+                "getwriter().print",
+                "getwriter().println",
+                "getwriter().write",
+                "getwriter().append",
+                "response.getwriter",
+                "response.getoutputstream",
+                "getoutputstream().write",
+                "servletoutputstream",
+                "printwriter",
+                "jspwriter",
+                "pagecontext.getout",
+                "getout().print",
+                "getout().println",
+                "getout().write",
+            ],
+            "ldap_injection": ["dircontext", "ldap", "search(", "filter", "lookup(", "initialcontext"],
             "xxe": ["documentbuilderfactory", "documentbuilder", "saxparser", "xmlreader", "inputsource"],
             "deserialization": ["objectinputstream", "readobject", "xmldecoder", "xstream"],
             "http_response_splitting": ["setheader(", "addheader(", "sendredirect(", "setstatus("],
             "reflection_injection": ["class.forname", "getmethod", "invoke(", "method.invoke", "newinstance"],
+            "ssrf": ["urlconnection", "httpurlconnection", "openconnection", "openstream"],
+            "xpath_injection": ["xpathfactory", "xpath", "compile(", "evaluate("],
+            "el_injection": [
+                "expressionfactory",
+                "createvalueexpression(",
+                "createmethodexpression(",
+                "valueexpression",
+                "methodexpression",
+                "elcontext",
+                "elprocessor",
+                "elprocessor.eval(",
+                "elmanager",
+                "expressionfactoryimpl",
+                "pagecontextimpl.proprietaryevaluate",
+                "getexpressionevaluator",
+                "expressionevaluator.evaluate(",
+                "javax.el",
+                "jakarta.el",
+                "freemarker.template",
+                "freemarker.template.template",
+                "velocityengine.mergetemplate(",
+                "velocityengine.evaluate(",
+                "velocity.evaluate(",
+                "velocitycontext",
+                "thymeleaf",
+                "stringtemplateresolver",
+                "mustache.execute(",
+                "mustachefactory.compile(",
+                "handlebars.compile(",
+                "handlebars.compileinline(",
+                "pebbleengine.gettemplate(",
+                "pebbletemplate.evaluate(",
+                "gg.jte",
+            ],
         }
 
         weak_crypto_markers = ["md5", "sha1", "des", "rc4", "blowfish", "md4"]
@@ -1707,6 +2254,69 @@ class IntegratedGNNFramework:
         user_input_hits = self._count_markers(code_lower, user_input_markers)
         sanitizer_hits = self._count_markers(code_lower, sanitizer_markers)
         sink_hits = {key: self._count_markers(code_lower, markers) for key, markers in sink_markers.items()}
+        sink_sanitizer_hits = {
+            key: self._count_markers(code_lower, markers)
+            for key, markers in sink_sanitizer_markers.items()
+        }
+        sanitizer_effectiveness_by_sink = {}
+        if taint_result and isinstance(taint_result, dict):
+            sanitizer_analysis = taint_result.get("sanitizer_analysis") or {}
+            if isinstance(sanitizer_analysis, dict):
+                analysis_hits = sanitizer_analysis.get("sink_sanitizer_hits") or {}
+                if isinstance(analysis_hits, dict):
+                    for key, value in analysis_hits.items():
+                        try:
+                            sink_sanitizer_hits[key] = max(sink_sanitizer_hits.get(key, 0), int(value))
+                        except Exception:
+                            continue
+                effectiveness = sanitizer_analysis.get("effectiveness_by_sink") or {}
+                if isinstance(effectiveness, dict):
+                    sanitizer_effectiveness_by_sink = effectiveness
+
+        framework_hits_by_vuln: Dict[str, int] = {}
+        framework_safe_hits_by_vuln: Dict[str, int] = {}
+        framework_unsafe_hits_by_vuln: Dict[str, int] = {}
+        framework_autoescape_disabled: Dict[str, int] = {}
+        framework_autoescape_enabled: Dict[str, int] = {}
+        if taint_result and isinstance(taint_result, dict):
+            framework_sinks = taint_result.get("framework_sinks") or {}
+            if isinstance(framework_sinks, dict):
+                framework_hits_by_vuln = framework_sinks.get("hits_by_vuln", {}) or {}
+                framework_safe_hits_by_vuln = framework_sinks.get("safe_hits_by_vuln", {}) or {}
+                framework_unsafe_hits_by_vuln = framework_sinks.get("unsafe_hits_by_vuln", {}) or {}
+                framework_autoescape_disabled = framework_sinks.get("autoescape_disabled", {}) or {}
+                framework_autoescape_enabled = framework_sinks.get("autoescape_enabled", {}) or {}
+
+        template_autoescape_disabled = 0
+        template_autoescape_enabled = 0
+        template_safe_variants = 0
+        template_unsafe_variants = 0
+        if taint_result and isinstance(taint_result, dict):
+            template_analysis = taint_result.get("template_engine_analysis") or {}
+            if isinstance(template_analysis, dict):
+                autoescape = template_analysis.get("autoescape", {}) or {}
+                if isinstance(autoescape, dict):
+                    template_autoescape_disabled = len(autoescape.get("disabled", []) or [])
+                    template_autoescape_enabled = len(autoescape.get("enabled", []) or [])
+                template_safe_variants = len(template_analysis.get("safe_variants", []) or [])
+                template_unsafe_variants = len(template_analysis.get("unsafe_variants", []) or [])
+
+        joern_flow_hits: Dict[str, int] = {}
+        joern_source_counts: Dict[str, int] = {}
+        joern_sink_counts: Dict[str, int] = {}
+        if taint_result and isinstance(taint_result, dict):
+            joern_dataflow = taint_result.get("joern_dataflow") or {}
+            if isinstance(joern_dataflow, dict):
+                flows_by_sink = joern_dataflow.get("flows_by_sink") or {}
+                if isinstance(flows_by_sink, dict):
+                    for sink_name, payload in flows_by_sink.items():
+                        if isinstance(payload, dict) and "flows" in payload:
+                            try:
+                                joern_flow_hits[sink_name] = int(payload.get("flows", 0) or 0)
+                                joern_source_counts[sink_name] = int(payload.get("sources", 0) or 0)
+                                joern_sink_counts[sink_name] = int(payload.get("sinks", 0) or 0)
+                            except Exception:
+                                continue
         weak_crypto_hits = self._count_markers(code_lower, weak_crypto_markers)
         insecure_random_hits = self._count_markers(code_lower, insecure_random_markers)
         secure_random_hits = self._count_markers(code_lower, secure_random_markers)
@@ -1719,6 +2329,20 @@ class IntegratedGNNFramework:
             "user_input_hits": user_input_hits,
             "sanitizer_hits": sanitizer_hits,
             "sink_hits": sink_hits,
+            "sink_sanitizer_hits": sink_sanitizer_hits,
+            "sanitizer_effectiveness_by_sink": sanitizer_effectiveness_by_sink,
+            "joern_flow_hits": joern_flow_hits,
+            "joern_source_counts": joern_source_counts,
+            "joern_sink_counts": joern_sink_counts,
+            "framework_hits": framework_hits_by_vuln,
+            "framework_safe_hits": framework_safe_hits_by_vuln,
+            "framework_unsafe_hits": framework_unsafe_hits_by_vuln,
+            "framework_autoescape_disabled": framework_autoescape_disabled,
+            "framework_autoescape_enabled": framework_autoescape_enabled,
+            "template_autoescape_disabled": template_autoescape_disabled,
+            "template_autoescape_enabled": template_autoescape_enabled,
+            "template_safe_variants": template_safe_variants,
+            "template_unsafe_variants": template_unsafe_variants,
             "weak_crypto_hits": weak_crypto_hits,
             "insecure_random_hits": insecure_random_hits,
             "secure_random_hits": secure_random_hits,
@@ -1760,8 +2384,20 @@ class IntegratedGNNFramework:
                     adjustment += 0.05
                 if evidence["sink_hits"].get(vuln, 0) > 0:
                     adjustment += 0.05
-                if evidence["sanitized_variables"] > 0 or evidence["sanitizer_hits"] > 0:
+                if evidence.get("framework_unsafe_hits", {}).get(vuln, 0) > 0:
+                    adjustment += 0.04
+                if evidence.get("framework_safe_hits", {}).get(vuln, 0) > 0 and evidence.get("framework_unsafe_hits", {}).get(vuln, 0) == 0:
+                    adjustment -= 0.03
+                if vuln == "xss":
+                    if evidence.get("template_autoescape_disabled", 0) > 0 or evidence.get("template_unsafe_variants", 0) > 0:
+                        adjustment += 0.04
+                    if evidence.get("template_autoescape_enabled", 0) > 0 and evidence.get("template_unsafe_variants", 0) == 0:
+                        adjustment -= 0.03
+                sink_sanitizer_hits = evidence.get("sink_sanitizer_hits", {}).get(vuln, 0)
+                if evidence["sanitized_variables"] > 0 or evidence["sanitizer_hits"] > 0 or sink_sanitizer_hits > 0:
                     adjustment -= min(0.08, 0.02 * max(evidence["sanitized_variables"], 1))
+                    if sink_sanitizer_hits > 0:
+                        adjustment -= min(0.06, 0.02 * sink_sanitizer_hits)
             elif vuln == "weak_crypto":
                 adjustment += 0.08 if evidence["weak_crypto_hits"] > 0 else -0.04
             elif vuln == "insecure_randomness":
@@ -1784,6 +2420,337 @@ class IntegratedGNNFramework:
         evidence["per_vuln_adjustments"] = per_vuln
         evidence["evidence_adjustment"] = total_adjustment
         return evidence
+
+    def _build_sink_evidence(
+        self,
+        vuln: str,
+        evidence: Dict[str, Any],
+    ) -> Tuple[List[Any], bool]:
+        if not self.sink_gating_engine or not SINK_GATING_AVAILABLE:
+            return [], False
+
+        taint_flows = int(evidence.get("taint_flows", 0))
+        sink_hits = int(evidence.get("sink_hits", {}).get(vuln, 0))
+        sink_sanitizer_hits = int(evidence.get("sink_sanitizer_hits", {}).get(vuln, 0))
+        joern_flow_hits = int(evidence.get("joern_flow_hits", {}).get(vuln, 0))
+        sanitizer_effectiveness_by_sink = evidence.get("sanitizer_effectiveness_by_sink", {}) or {}
+        sink_effectiveness = None
+        try:
+            if vuln in sanitizer_effectiveness_by_sink:
+                sink_effectiveness = float(sanitizer_effectiveness_by_sink.get(vuln, 0.0))
+        except Exception:
+            sink_effectiveness = None
+        sanitized_vars = int(evidence.get("sanitized_variables", 0))
+        sanitizer_hits = int(evidence.get("sanitizer_hits", 0))
+        user_input_hits = int(evidence.get("user_input_hits", 0))
+        framework_safe_hits = int(evidence.get("framework_safe_hits", {}).get(vuln, 0))
+        framework_unsafe_hits = int(evidence.get("framework_unsafe_hits", {}).get(vuln, 0))
+        framework_autoescape_disabled = int(evidence.get("framework_autoescape_disabled", {}).get(vuln, 0))
+        template_autoescape_disabled = int(evidence.get("template_autoescape_disabled", 0))
+        template_autoescape_enabled = int(evidence.get("template_autoescape_enabled", 0))
+        template_unsafe_variants = int(evidence.get("template_unsafe_variants", 0))
+        joern_sources = int(evidence.get("joern_source_counts", {}).get(vuln, 0))
+        joern_sinks = int(evidence.get("joern_sink_counts", {}).get(vuln, 0))
+
+        is_direct_flow = (taint_flows > 0 and sink_hits > 0) or joern_flow_hits > 0
+        evidence_items: List[Any] = []
+
+        if joern_flow_hits > 0:
+            reachability_type, reachability_conf = self._compute_reachability_confidence(
+                joern_flow_hits, joern_sources, joern_sinks
+            )
+            evidence_items.append(
+                EvidenceInstance(
+                    evidence_type=EvidenceType.DIRECT_TAINT_PATH,
+                    description=f"Joern reachableByFlows ({joern_flow_hits} path(s); {reachability_type})",
+                    confidence_score=reachability_conf,
+                )
+            )
+            if joern_flow_hits > 1:
+                evidence_items.append(
+                    EvidenceInstance(
+                        evidence_type=EvidenceType.MULTIPLE_PATHS,
+                        description=f"Multiple Joern paths ({joern_flow_hits})",
+                        confidence_score=0.85,
+                    )
+                )
+
+        if taint_flows > 0:
+            flow_conf = 0.70 + min(0.20, 0.05 * taint_flows)
+            flow_type = EvidenceType.DIRECT_TAINT_PATH if is_direct_flow else EvidenceType.INDIRECT_TAINT_PATH
+            evidence_items.append(
+                EvidenceInstance(
+                    evidence_type=flow_type,
+                    description=f"Taint flow evidence ({taint_flows} paths)",
+                    confidence_score=flow_conf,
+                )
+            )
+
+        if taint_flows > 1:
+            evidence_items.append(
+                EvidenceInstance(
+                    evidence_type=EvidenceType.MULTIPLE_PATHS,
+                    description=f"Multiple taint paths ({taint_flows})",
+                    confidence_score=0.80,
+                )
+            )
+
+        if sink_hits > 0:
+            evidence_items.append(
+                EvidenceInstance(
+                    evidence_type=EvidenceType.DANGEROUS_PATTERN,
+                    description=f"Sink usage detected ({sink_hits})",
+                    confidence_score=0.75,
+                )
+            )
+
+        if framework_unsafe_hits > 0 or framework_autoescape_disabled > 0:
+            evidence_items.append(
+                EvidenceInstance(
+                    evidence_type=EvidenceType.DANGEROUS_PATTERN,
+                    description="Framework sink unsafe variant detected",
+                    confidence_score=0.78,
+                )
+            )
+        elif framework_safe_hits > 0:
+            evidence_items.append(
+                EvidenceInstance(
+                    evidence_type=EvidenceType.WEAK_VALIDATION,
+                    description="Framework sink safe-by-default variant detected",
+                    confidence_score=0.35,
+                )
+            )
+
+        if vuln in {"xss", "el_injection"}:
+            if template_autoescape_disabled > 0 or template_unsafe_variants > 0:
+                evidence_items.append(
+                    EvidenceInstance(
+                        evidence_type=EvidenceType.DANGEROUS_PATTERN,
+                        description="Template auto-escape disabled or unsafe variants detected",
+                        confidence_score=0.80,
+                    )
+                )
+            elif template_autoescape_enabled > 0 and template_unsafe_variants == 0:
+                evidence_items.append(
+                    EvidenceInstance(
+                        evidence_type=EvidenceType.WEAK_VALIDATION,
+                        description="Template auto-escape enabled",
+                        confidence_score=0.35,
+                    )
+                )
+
+        if sanitized_vars == 0 and sanitizer_hits == 0 and sink_sanitizer_hits == 0:
+            evidence_items.append(
+                EvidenceInstance(
+                    evidence_type=EvidenceType.NO_SANITIZER,
+                    description="No sanitizer evidence detected",
+                    confidence_score=0.85,
+                )
+            )
+        elif sink_sanitizer_hits > 0:
+            if sink_effectiveness is not None and sink_effectiveness >= 0.85:
+                pass
+            elif sink_effectiveness is not None and sink_effectiveness >= 0.60:
+                evidence_items.append(
+                    EvidenceInstance(
+                        evidence_type=EvidenceType.WEAK_VALIDATION,
+                        description=f"Sink-specific sanitizers weak/moderate ({sink_sanitizer_hits})",
+                        confidence_score=0.45,
+                    )
+                )
+            else:
+                evidence_items.append(
+                    EvidenceInstance(
+                        evidence_type=EvidenceType.INEFFECTIVE_SANITIZER,
+                        description=f"Sink-specific sanitizers ineffective ({sink_sanitizer_hits})",
+                        confidence_score=0.30,
+                    )
+                )
+        elif sanitizer_hits > 0 or sanitized_vars > 0:
+            evidence_items.append(
+                EvidenceInstance(
+                    evidence_type=EvidenceType.WEAK_VALIDATION,
+                    description="Generic sanitization/validation evidence present",
+                    confidence_score=0.40,
+                )
+            )
+
+        if user_input_hits > 0 and taint_flows > 0:
+            evidence_items.append(
+                EvidenceInstance(
+                    evidence_type=EvidenceType.DIRECT_TAINT_PATH,
+                    description="User input markers present",
+                    confidence_score=0.78,
+                )
+            )
+
+        return evidence_items, is_direct_flow
+
+    def _compute_reachability_confidence(
+        self,
+        joern_flows: int,
+        joern_sources: int,
+        joern_sinks: int,
+    ) -> Tuple[str, float]:
+        if joern_sources == 0 or joern_sinks == 0:
+            return "unknown", 0.0
+        if joern_flows == 0:
+            return "unreachable", 0.0
+        if joern_flows == 1:
+            return "direct", 0.85
+        if joern_flows <= 3:
+            return "indirect", 0.75
+        return "conditional", 0.65
+
+    def _apply_taint_gating(
+        self,
+        vulnerabilities: List[str],
+        source_code: str,
+        taint_result: Optional[Dict[str, Any]],
+    ) -> Tuple[List[str], Dict[str, Any]]:
+        if not vulnerabilities:
+            return vulnerabilities, {"enabled": False, "reason": "no_vulnerabilities"}
+        if not taint_result:
+            return vulnerabilities, {"enabled": False, "reason": "taint_unavailable"}
+
+        evidence = self._extract_evidence_signals(source_code, taint_result)
+        taint_flows = evidence.get("taint_flows", 0)
+        sanitizer_hits = evidence.get("sanitizer_hits", 0)
+        sanitized_vars = evidence.get("sanitized_variables", 0)
+        user_input_hits = evidence.get("user_input_hits", 0)
+        sink_sanitizer_hits = evidence.get("sink_sanitizer_hits", {})
+        joern_flow_hits = evidence.get("joern_flow_hits", {})
+        joern_source_counts = evidence.get("joern_source_counts", {})
+        joern_sink_counts = evidence.get("joern_sink_counts", {})
+
+        gating_types = {
+            "sql_injection",
+            "xss",
+            "ldap_injection",
+            "xxe",
+            "path_traversal",
+            "command_injection",
+            "http_response_splitting",
+            "reflection_injection",
+            "el_injection",
+        }
+
+        kept: List[str] = []
+        dropped: List[Dict[str, Any]] = []
+        decisions: List[Dict[str, Any]] = []
+        for vuln in vulnerabilities:
+            if vuln not in gating_types:
+                kept.append(vuln)
+                continue
+
+            joern_flows = int(joern_flow_hits.get(vuln, 0) or 0)
+            joern_sources = int(joern_source_counts.get(vuln, 0) or 0)
+            joern_sinks = int(joern_sink_counts.get(vuln, 0) or 0)
+            if joern_sinks > 0 and joern_sources > 0 and joern_flows == 0:
+                dropped.append({
+                    "vulnerability": vuln,
+                    "reason": "joern_unreachable",
+                    "joern_sources": joern_sources,
+                    "joern_sinks": joern_sinks,
+                })
+                decisions.append({
+                    "vulnerability": vuln,
+                    "passed": False,
+                    "confidence": 0.0,
+                    "threshold": None,
+                    "flow_type": "joern_unreachable",
+                    "evidence_types": [],
+                    "reason": "joern_unreachable",
+                })
+                continue
+
+            if self.sink_gating_engine and SINK_GATING_AVAILABLE:
+                evidence_items, is_direct_flow = self._build_sink_evidence(vuln, evidence)
+                if not evidence_items:
+                    dropped.append({"vulnerability": vuln, "reason": "insufficient_evidence"})
+                    decisions.append({
+                        "vulnerability": vuln,
+                        "passed": False,
+                        "confidence": 0.0,
+                        "threshold": None,
+                        "flow_type": "unknown",
+                        "evidence_types": [],
+                        "reason": "insufficient_evidence",
+                    })
+                    continue
+
+                confidence, passed, details = self.sink_gating_engine.evaluate_vulnerability(
+                    vuln, evidence_items, is_direct_flow=is_direct_flow
+                )
+                decisions.append({
+                    "vulnerability": vuln,
+                    "passed": passed,
+                    "confidence": confidence,
+                    "threshold": details.get("threshold"),
+                    "flow_type": details.get("flow_type"),
+                    "evidence_types": [e.get("type") for e in details.get("evidence_breakdown", [])],
+                    "details": details,
+                })
+                if passed:
+                    kept.append(vuln)
+                else:
+                    dropped.append({
+                        "vulnerability": vuln,
+                        "reason": "confidence_gate",
+                        "confidence": confidence,
+                        "threshold": details.get("threshold"),
+                    })
+                continue
+
+            sink_hits = evidence.get("sink_hits", {}).get(vuln, 0)
+            taint_ok = taint_flows > 0
+            sink_ok = sink_hits > 0
+            sanitized = sanitized_vars > 0 or sanitizer_hits > 0 or sink_sanitizer_hits.get(vuln, 0) > 0
+
+            if not taint_ok:
+                dropped.append({"vulnerability": vuln, "reason": "no_taint_flows"})
+                continue
+            if not sink_ok:
+                dropped.append({"vulnerability": vuln, "reason": "no_sink_evidence"})
+                continue
+            if sanitized and taint_flows <= 1 and sink_hits <= 1 and user_input_hits == 0:
+                dropped.append({"vulnerability": vuln, "reason": "sanitization_evidence"})
+                continue
+
+            kept.append(vuln)
+
+        gating_report = {
+            "enabled": True,
+            "gated_types": sorted(gating_types),
+            "kept": kept,
+            "dropped": dropped,
+            "decisions": decisions,
+            "engine": {
+                "enabled": bool(self.sink_gating_engine),
+                "available": SINK_GATING_AVAILABLE,
+            },
+            "evidence": {
+                "taint_flows": taint_flows,
+                "sanitized_variables": sanitized_vars,
+                "sanitizer_hits": sanitizer_hits,
+                "sink_hits": evidence.get("sink_hits", {}),
+                "sink_sanitizer_hits": sink_sanitizer_hits,
+                "sanitizer_effectiveness_by_sink": evidence.get("sanitizer_effectiveness_by_sink", {}),
+                "joern_flow_hits": evidence.get("joern_flow_hits", {}),
+                "joern_source_counts": evidence.get("joern_source_counts", {}),
+                "joern_sink_counts": evidence.get("joern_sink_counts", {}),
+                "framework_hits": evidence.get("framework_hits", {}),
+                "framework_safe_hits": evidence.get("framework_safe_hits", {}),
+                "framework_unsafe_hits": evidence.get("framework_unsafe_hits", {}),
+                "framework_autoescape_disabled": evidence.get("framework_autoescape_disabled", {}),
+                "framework_autoescape_enabled": evidence.get("framework_autoescape_enabled", {}),
+                "template_autoescape_disabled": evidence.get("template_autoescape_disabled", 0),
+                "template_autoescape_enabled": evidence.get("template_autoescape_enabled", 0),
+                "template_safe_variants": evidence.get("template_safe_variants", 0),
+                "template_unsafe_variants": evidence.get("template_unsafe_variants", 0),
+            },
+        }
+        return kept, gating_report
 
     def _actual_gnn_processing(
         self,

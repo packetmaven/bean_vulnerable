@@ -26,6 +26,7 @@ import tempfile
 import shutil
 import subprocess
 import os
+import re
 import asyncio
 import threading
 import queue
@@ -39,6 +40,13 @@ import random
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 import multiprocessing
 
+from core.soundness_testing.runner import run_soundness_validation
+from core.taint_debugging.taint_flow_visualizer import write_taint_graph
+from core.taint_debugging.interactive_cli import launch_debugger_from_result
+from core.precision_debugging.diagnosis import analyze_source
+from core.performance.profiling_harness import ProfilingConfiguration, MultiLayerProfiler
+from core.performance.object_profiler import ObjectCentricProfiler
+
 # Enhanced logging configuration
 logging.basicConfig(
     level=logging.INFO,
@@ -51,6 +59,85 @@ logging.basicConfig(
 LOG = logging.getLogger(__name__)
 
 REPORT_DIR_MARKER = ".bean_vuln_report"
+
+EDGE_STYLE_MAP = {
+    "AST": {"color": "#9e9e9e", "style": "solid"},
+    "CFG": {"color": "#0055A4", "style": "solid"},
+    "DFG": {"color": "#DC143C", "style": "dotted"},
+    "DDG": {"color": "#DC143C", "style": "dotted"},
+    "CDG": {"color": "#0055A4", "style": "dashed"},
+    "CALL": {"color": "#2E7D32", "style": "solid"},
+}
+
+
+def _resolve_tai_e_jar(candidate: Optional[str]) -> Optional[Path]:
+    if not candidate:
+        return None
+    path = Path(candidate).expanduser()
+    if not path.exists():
+        return None
+    if path.is_file() and path.suffix == ".jar":
+        return path
+    jars = sorted(path.rglob("tai-e-all*.jar"))
+    if jars:
+        return jars[0]
+    jars = sorted(path.rglob("*.jar"))
+    return jars[0] if jars else None
+
+
+def _maybe_prompt_tai_e_home(args: argparse.Namespace) -> None:
+    if not args.tai_e:
+        return
+    candidate = args.tai_e_home or os.getenv("TAI_E_HOME")
+    jar_path = _resolve_tai_e_jar(candidate)
+    if jar_path:
+        if not args.tai_e_home:
+            args.tai_e_home = str(jar_path)
+        return
+    if not sys.stdin.isatty():
+        return
+    try:
+        user_input = input(
+            "TAI_E_HOME not set or jar not found. "
+            "Enter path to tai-e-all.jar (or directory): "
+        ).strip()
+    except EOFError:
+        return
+    if not user_input:
+        return
+    jar_path = _resolve_tai_e_jar(user_input)
+    args.tai_e_home = str(jar_path) if jar_path else user_input
+
+EDGE_LABEL_RE = re.compile(r'label\s*=\s*"([A-Z]+):')
+
+
+def _colorize_dot_file(dot_path: Path) -> None:
+    try:
+        content = dot_path.read_text(encoding="utf-8")
+    except Exception:
+        return
+
+    updated_lines = []
+    changed = False
+    for line in content.splitlines():
+        match = EDGE_LABEL_RE.search(line)
+        if match and "color=" not in line:
+            edge_type = match.group(1)
+            style = EDGE_STYLE_MAP.get(edge_type)
+            if style and "]" in line:
+                attrs = [
+                    f'color="{style["color"]}"',
+                    f'fontcolor="{style["color"]}"',
+                    f'style="{style["style"]}"',
+                    "penwidth=1.4",
+                ]
+                head, tail = line.rsplit("]", 1)
+                line = f"{head}, {', '.join(attrs)} ]{tail}"
+                changed = True
+        updated_lines.append(line)
+
+    if changed:
+        dot_path.write_text("\n".join(updated_lines), encoding="utf-8")
 
 def _is_unsafe_report_dir(report_dir: Path) -> bool:
     """Block obvious destructive paths."""
@@ -530,6 +617,154 @@ async def analyze_path_enhanced(p: Path, config: AnalysisConfiguration,
         )
         return error_result, {}
 
+def _apply_debug_utilities_enhanced(
+    fw_result: Dict[str, Any],
+    source_path: Path,
+    cli_args: argparse.Namespace,
+    report_dir: Optional[Path],
+) -> None:
+    if not isinstance(fw_result, dict):
+        return
+    taint_tracking = fw_result.get("taint_tracking", {}) if isinstance(fw_result.get("taint_tracking", {}), dict) else {}
+
+    if cli_args.taint_graph:
+        flows = taint_tracking.get("taint_flows", [])
+        if flows:
+            if cli_args.taint_graph_output:
+                output_path = Path(cli_args.taint_graph_output).expanduser()
+            elif report_dir:
+                output_path = report_dir / f"taint_flow_graph_{source_path.stem}.html"
+            else:
+                output_path = Path("analysis") / f"taint_flow_graph_{source_path.stem}.html"
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            write_taint_graph(output_path, flows)
+            if report_dir and output_path.is_absolute() and report_dir in output_path.parents:
+                fw_result["taint_graph"] = {"path": str(output_path.relative_to(report_dir))}
+            else:
+                fw_result["taint_graph"] = {"path": str(output_path)}
+
+    if cli_args.tai_e_soundness:
+        alias_analysis = taint_tracking.get("alias_analysis", {})
+        tai_e_meta = alias_analysis.get("tai_e", {}) if isinstance(alias_analysis, dict) else {}
+        points_to_file = tai_e_meta.get("points_to_file")
+        if points_to_file:
+            output_base = (
+                Path(cli_args.tai_e_soundness_output).expanduser()
+                if cli_args.tai_e_soundness_output
+                else (report_dir or Path("analysis"))
+            )
+            report_output = output_base if output_base.suffix == ".html" else output_base / f"soundness_report_{source_path.stem}.html"
+            report_output.parent.mkdir(parents=True, exist_ok=True)
+            report = run_soundness_validation(
+                source_path=source_path,
+                points_to_file=Path(points_to_file),
+                classpath=cli_args.tai_e_classpath,
+                output_dir=report_output.parent,
+                report_path=report_output,
+            )
+            report_path = report.report_path
+            if report_dir and report_path and Path(report_path).is_absolute() and report_dir in Path(report_path).parents:
+                report_path = str(Path(report_path).relative_to(report_dir))
+            fw_result["soundness_validation"] = {
+                "success": report.success,
+                "report_path": report_path,
+                "error": report.error,
+                "summary": report.report,
+            }
+
+    if cli_args.tai_e_precision_diagnose:
+        source_code = source_path.read_text(encoding="utf-8", errors="ignore")
+        fw_result["precision_diagnosis"] = analyze_source(source_code).to_dict()
+
+    if cli_args.taint_debug:
+        if cli_args.input and len(cli_args.input) == 1:
+            launch_debugger_from_result(fw_result)
+
+    if cli_args.tai_e_profile:
+        source_code = source_path.read_text(encoding="utf-8", errors="ignore")
+        output_base = (
+            Path(cli_args.tai_e_profile_output).expanduser()
+            if cli_args.tai_e_profile_output
+            else (report_dir or (Path("analysis") / "tai_e_profiling"))
+        )
+        output_dir = output_base.parent if output_base.suffix == ".html" else output_base
+        output_dir.mkdir(parents=True, exist_ok=True)
+        profiling_config = ProfilingConfiguration(
+            enable_cpu_profiling=bool(cli_args.async_profiler_path),
+            enable_memory_profiling=bool(cli_args.yourkit_agent_path),
+            enable_tai_e_profiling=False,
+            enable_system_profiling=cli_args.profile_system,
+            enable_jfr=cli_args.profile_jfr,
+            async_profiler_path=Path(cli_args.async_profiler_path).expanduser() if cli_args.async_profiler_path else None,
+            yourkit_agent_path=Path(cli_args.yourkit_agent_path).expanduser() if cli_args.yourkit_agent_path else None,
+            max_heap=cli_args.profile_max_heap,
+            min_heap=cli_args.profile_min_heap,
+            output_dir=output_dir,
+        )
+        profiler = MultiLayerProfiler(profiling_config)
+        profile_results = profiler.profile_tai_e_analysis(
+            source_code=source_code,
+            source_path=str(source_path),
+            tai_e_home=cli_args.tai_e_home,
+            tai_e_config={
+                "main_class": cli_args.tai_e_main,
+                "cs": cli_args.tai_e_cs,
+                "timeout": cli_args.tai_e_timeout,
+                "only_app": cli_args.tai_e_only_app,
+                "allow_phantom": cli_args.tai_e_allow_phantom,
+                "prepend_jvm": cli_args.tai_e_prepend_jvm,
+                "java_version": cli_args.tai_e_java_version,
+                "classpath": cli_args.tai_e_classpath,
+                "taint_config": cli_args.tai_e_taint_config if cli_args.tai_e_taint else None,
+            },
+        )
+        report_path = profile_results.get("profiling_report")
+        if report_path and output_base.suffix == ".html" and report_path != str(output_base):
+            try:
+                Path(report_path).replace(output_base)
+                report_path = str(output_base)
+            except Exception:
+                pass
+        if report_dir and report_path and Path(report_path).is_absolute() and report_dir in Path(report_path).parents:
+            report_path = str(Path(report_path).relative_to(report_dir))
+        fw_result["tai_e_profiling"] = {
+            "success": profile_results.get("return_code") == 0 and not profile_results.get("errors"),
+            "report_path": report_path,
+            "errors": profile_results.get("errors"),
+            "summary": {
+                "elapsed_time": profile_results.get("elapsed_time"),
+                "return_code": profile_results.get("return_code"),
+                "process_metrics": profile_results.get("process_metrics"),
+            },
+            "output_dir": profile_results.get("tai_e_output_dir"),
+        }
+
+    if cli_args.object_profile:
+        snapshot_path = Path(cli_args.object_profile).expanduser()
+        output_base = (
+            Path(cli_args.object_profile_output).expanduser()
+            if cli_args.object_profile_output
+            else (report_dir or Path("analysis"))
+        )
+        report_output = output_base if output_base.suffix == ".html" else output_base / f"object_profile_{source_path.stem}.html"
+        report_output.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            profiler = ObjectCentricProfiler(snapshot_path)
+            report = profiler.generate_optimization_report(report_output)
+            report_path = str(report_output)
+            if report_dir and report_output.is_absolute() and report_dir in report_output.parents:
+                report_path = str(report_output.relative_to(report_dir))
+            fw_result["object_profile"] = {
+                "success": True,
+                "report_path": report_path,
+                "summary": report,
+            }
+        except Exception as exc:
+            fw_result["object_profile"] = {
+                "success": False,
+                "error": str(exc),
+            }
+
 def consolidate_analysis_results(results: Dict[str, Any], methods: List[str]) -> VulnerabilityResult:
     """
     Consolidate results from multiple analysis methods into a unified result.
@@ -638,7 +873,24 @@ def initialize_framework(args) -> Tuple[Any, Optional[Any]]:
             enable_spatial_gnn=args.spatial_gnn or args.comprehensive,
             enable_explanations=args.explain or args.comprehensive,
             joern_timeout=args.joern_timeout,
-            gnn_checkpoint=args.gnn_checkpoint
+            gnn_checkpoint=args.gnn_checkpoint,
+            gnn_weight=args.gnn_weight,
+            gnn_confidence_threshold=args.gnn_confidence_threshold,
+            gnn_temperature=args.gnn_temperature,
+            gnn_ensemble=args.gnn_ensemble,
+            enable_joern_dataflow=args.joern_dataflow,
+            enable_tai_e=args.tai_e,
+            tai_e_home=args.tai_e_home,
+            tai_e_cs=args.tai_e_cs,
+            tai_e_main=args.tai_e_main,
+            tai_e_timeout=args.tai_e_timeout,
+            tai_e_only_app=args.tai_e_only_app,
+            tai_e_allow_phantom=args.tai_e_allow_phantom,
+            tai_e_prepend_jvm=args.tai_e_prepend_jvm,
+            tai_e_java_version=args.tai_e_java_version,
+            tai_e_classpath=args.tai_e_classpath,
+            tai_e_enable_taint=args.tai_e_taint,
+            tai_e_taint_config=args.tai_e_taint_config,
         )
         
         # Initialize hybrid analyzer if advanced features are enabled
@@ -680,6 +932,26 @@ def _write_dfg_paths_file(analysis_result: Dict[str, Any], report_dir: Path) -> 
     content = "═══════════════════════════════════════════════════════════════\n"
     content += "  DATA FLOW PATHS ANALYSIS (Bean Vulnerable Framework)\n"
     content += "═══════════════════════════════════════════════════════════════\n\n"
+
+    joern_dataflow = analysis_result.get("joern_dataflow", {}) or {}
+    flows_by_sink = joern_dataflow.get("flows_by_sink", {}) if isinstance(joern_dataflow, dict) else {}
+    if isinstance(flows_by_sink, dict) and flows_by_sink:
+        total_flows = 0
+        content += "[✓] Joern reachableByFlows summary\n\n"
+        for sink_name, payload in flows_by_sink.items():
+            if not isinstance(payload, dict):
+                continue
+            flows = int(payload.get("flows", 0) or 0)
+            sources = int(payload.get("sources", 0) or 0)
+            sinks = int(payload.get("sinks", 0) or 0)
+            total_flows += flows
+            content += "──────────────────────────────────────────────────────────────\n"
+            content += f"SINK TYPE: {sink_name}\n"
+            content += f"Sources: {sources} | Sinks: {sinks} | Reachable Flows: {flows}\n"
+            content += "──────────────────────────────────────────────────────────────\n\n"
+        content += f"Total reachable flows: {total_flows}\n\n"
+    else:
+        content += "[!] No Joern reachableByFlows data available for this file\n\n"
     
     # Get taint tracking results
     taint_tracking = analysis_result.get('taint_tracking', {})
@@ -774,14 +1046,86 @@ def main():
     ap.add_argument("--spatial-gnn", action="store_true", default=True,
                     help="Enable spatial GNN inference (default; requires torch + torch-geometric)")
     ap.add_argument("--no-spatial-gnn", action="store_false", dest="spatial_gnn",
-                    help="Disable spatial GNN inference")
+                    help="Deprecated: spatial GNN is always enabled")
     ap.add_argument("--gnn-checkpoint",
+                    action="append",
                     help="Path to Spatial GNN checkpoint (trained weights for inference)")
+    ap.add_argument("--gnn-weight", type=float, default=0.6,
+                    help="Weight for GNN confidence in final scoring (default: 0.6)")
+    ap.add_argument("--gnn-confidence-threshold", type=float, default=0.5,
+                    help="Minimum combined confidence to report a vulnerability when GNN weights are loaded")
+    ap.add_argument("--gnn-temperature", type=float, default=1.0,
+                    help="Temperature for calibrating GNN confidence (default: 1.0)")
+    ap.add_argument("--gnn-ensemble", type=int, default=1,
+                    help="Number of GNN checkpoints to use in ensemble (default: 1)")
+    ap.add_argument("--joern-dataflow", action="store_true",
+                    help="Enable Joern reachableByFlows dataflow extraction for gating")
     ap.add_argument("--explain", action="store_true", help="Generate explanations")
     ap.add_argument("--comprehensive", action="store_true", 
                    help="Enable all advanced features (hybrid + RL + property testing)")
     ap.add_argument("--joern-timeout", type=int, default=480, help="Joern operation timeout")
-    
+    ap.add_argument("--tai-e", action="store_true",
+                    help="Enable Tai-e object-sensitive pointer analysis (requires Tai-e installed)")
+    ap.add_argument("--tai-e-home",
+                    help="Path to Tai-e installation (or set TAI_E_HOME)")
+    ap.add_argument("--tai-e-main",
+                    help="Tai-e main class (fully-qualified, must define main(String[]))")
+    ap.add_argument("--tai-e-cs", default="1-obj",
+                    help="Tai-e context sensitivity (e.g., 1-obj, 2-obj, 1-type)")
+    ap.add_argument("--tai-e-timeout", type=int, default=300,
+                    help="Tai-e pointer analysis timeout in seconds (default: 300)")
+    ap.add_argument("--tai-e-only-app", action="store_true", default=True,
+                    help="Analyze application classes only (default: true)")
+    ap.add_argument("--tai-e-all-classes", action="store_false", dest="tai_e_only_app",
+                    help="Include library classes in Tai-e analysis")
+    ap.add_argument("--tai-e-allow-phantom", action="store_true", default=True,
+                    help="Allow phantom references in Tai-e (default: true)")
+    ap.add_argument("--tai-e-no-phantom", action="store_false", dest="tai_e_allow_phantom",
+                    help="Disable phantom references in Tai-e")
+    ap.add_argument("--tai-e-prepend-jvm", action="store_true", default=True,
+                    help="Use current JVM classpath for Tai-e (default: true)")
+    ap.add_argument("--tai-e-no-prepend-jvm", action="store_false", dest="tai_e_prepend_jvm",
+                    help="Do not prepend JVM classpath in Tai-e")
+    ap.add_argument("--tai-e-java-version", type=int,
+                    help="Tai-e -java version (uses bundled Java libs if available)")
+    ap.add_argument("--tai-e-classpath",
+                    help="Additional classpath for Tai-e compilation (javac -cp)")
+    ap.add_argument("--tai-e-taint", action="store_true",
+                    help="Enable Tai-e taint analysis (requires taint config)")
+    ap.add_argument("--tai-e-taint-config",
+                    help="Path to Tai-e taint config (file or directory)")
+    ap.add_argument("--tai-e-soundness", action="store_true",
+                    help="Run Tai-e soundness validation using runtime logging")
+    ap.add_argument("--tai-e-soundness-output",
+                    help="Path to write Tai-e soundness HTML report")
+    ap.add_argument("--taint-graph", action="store_true",
+                    help="Generate interactive taint flow graph HTML")
+    ap.add_argument("--taint-graph-output",
+                    help="Path to write taint flow graph HTML")
+    ap.add_argument("--taint-debug", action="store_true",
+                    help="Launch interactive taint debugger (single input only)")
+    ap.add_argument("--tai-e-precision-diagnose", action="store_true",
+                    help="Run heuristic precision diagnosis for Tai-e runs")
+    ap.add_argument("--tai-e-profile", action="store_true",
+                    help="Run Tai-e profiling harness (best-effort, optional tools)")
+    ap.add_argument("--tai-e-profile-output",
+                    help="Directory (or .html file) for profiling report output")
+    ap.add_argument("--async-profiler-path",
+                    help="Path to async-profiler agent (enables CPU profiling)")
+    ap.add_argument("--yourkit-agent-path",
+                    help="Path to YourKit agent (enables memory profiling)")
+    ap.add_argument("--profile-jfr", action="store_true",
+                    help="Enable JVM Flight Recorder collection during profiling")
+    ap.add_argument("--profile-system", action="store_true",
+                    help="Enable system-level sampling during profiling")
+    ap.add_argument("--profile-max-heap",
+                    help="Set JVM -Xmx for profiling runs (e.g. 8g)")
+    ap.add_argument("--profile-min-heap",
+                    help="Set JVM -Xms for profiling runs (e.g. 2g)")
+    ap.add_argument("--object-profile",
+                    help="Path to YourKit snapshot or CSV export for object profiling")
+    ap.add_argument("--object-profile-output",
+                    help="Path to write object profiling HTML report")
     # Dataset and evaluation options
     ap.add_argument("--dataset", choices=['vul4j', 'bigvul', 'devign', 'diversevul'], 
                    help="Specify dataset for evaluation")
@@ -789,6 +1133,25 @@ def main():
                    help="Run comprehensive benchmark evaluation")
     
     args = ap.parse_args()
+    if not args.spatial_gnn:
+        LOG.warning("⚠️ Ignoring --no-spatial-gnn; spatial GNN is always enabled.")
+        args.spatial_gnn = True
+    if args.tai_e_taint_config:
+        args.tai_e_taint = True
+    if args.tai_e_taint and not args.tai_e_taint_config:
+        default_taint_config = (
+            Path(__file__).resolve().parents[2]
+            / "configs"
+            / "tai_e"
+            / "taint"
+            / "web-vulnerabilities.yml"
+        )
+        if default_taint_config.exists():
+            args.tai_e_taint_config = str(default_taint_config)
+        else:
+            LOG.warning("Tai-e taint enabled but no config found; skipping taint analysis.")
+            args.tai_e_taint = False
+    _maybe_prompt_tai_e_home(args)
     
     # Configure comprehensive mode
     if args.comprehensive:
@@ -845,6 +1208,7 @@ def main():
     results = []
     framework_results = []  # Store original framework results for HTML report
     start_time = time.time()
+    debug_report_dir = Path(args.html_report).expanduser() if args.html_report else None
     
     async def process_inputs():
         """Async processing of multiple inputs with enhanced analysis"""
@@ -891,6 +1255,14 @@ def main():
                 continue
                 
             if isinstance(result, VulnerabilityResult):
+                source_path = Path(args.input[i]).expanduser().resolve() if i < len(args.input) else None
+                if source_path and framework_results:
+                    _apply_debug_utilities_enhanced(
+                        framework_results[-1],
+                        source_path,
+                        args,
+                        debug_report_dir,
+                    )
                 # Display summary if requested
                 if args.summary:
                     print(f"  📊 Result Summary:")
@@ -991,15 +1363,6 @@ def main():
             LOG.info(f"🎨 Generating comprehensive graphs for {source_path.name}...")
             
             try:
-                # Clean workspace to ensure fresh Joern analysis
-                workspace_dir = Path.cwd() / 'workspace'
-                if workspace_dir.exists():
-                    try:
-                        shutil.rmtree(workspace_dir)
-                        LOG.debug("🧹 Cleaned workspace cache before graph generation")
-                    except Exception as e:
-                        LOG.warning(f"⚠️ Could not clean workspace: {e}")
-                
                 # Use the COMPREHENSIVE Joern script for detailed graphs
                 script_path = Path(__file__).parent.parent.parent / "comprehensive_graphs.sc"
                 env = os.environ.copy()
@@ -1008,14 +1371,16 @@ def main():
                 
                 LOG.info(f"📊 Running comprehensive graph generation (all methods, interprocedural)...")
                 
-                # Run Joern script
-                graph_result = subprocess.run(
-                    ['/usr/local/bin/joern', '--script', str(script_path)],
-                    env=env,
-                    capture_output=True,
-                    text=True,
-                    timeout=120
-                )
+                # Run Joern script in an isolated workspace
+                with tempfile.TemporaryDirectory() as joern_workdir:
+                    graph_result = subprocess.run(
+                        ['/usr/local/bin/joern', '--script', str(script_path)],
+                        env=env,
+                        capture_output=True,
+                        text=True,
+                        timeout=120,
+                        cwd=joern_workdir,
+                    )
                 
                 if graph_result.stdout:
                     LOG.debug(f"Joern output: {graph_result.stdout}")
@@ -1024,6 +1389,8 @@ def main():
                 
                 # Convert ALL .dot files to PNG and SVG
                 dot_files = list(report_dir.glob('*.dot'))
+                for dot_file in dot_files:
+                    _colorize_dot_file(dot_file)
                 LOG.info(f"🎨 Converting {len(dot_files)} DOT files to PNG/SVG...")
                 
                 for dot_file in dot_files:

@@ -14,7 +14,7 @@ Based on: OWASP Top 10 2024, CWE-20/502, Tai-e v0.4.0, FSE 2024, PLDI 2024
 """
 
 from pathlib import Path
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 from datetime import datetime
 import webbrowser
 import shutil
@@ -55,6 +55,13 @@ def generate_comprehensive_html_report(result: Dict[str, Any], report_dir: Path,
     taint_tracking = result.get('taint_tracking', {})
     alias_analysis = taint_tracking.get('alias_analysis', {})
     taint_assignments = taint_tracking.get('taint_assignments', {})
+    sanitizer_analysis = taint_tracking.get('sanitizer_analysis', {})
+    framework_sinks = result.get('framework_sinks', {}) or taint_tracking.get('framework_sinks', {})
+    template_engine_analysis = result.get('template_engine_analysis', {}) or taint_tracking.get('template_engine_analysis', {})
+    taint_graph = result.get('taint_graph', {}) if isinstance(result.get('taint_graph', {}), dict) else {}
+    soundness_validation = result.get('soundness_validation', {}) if isinstance(result.get('soundness_validation', {}), dict) else {}
+    tai_e_profiling = result.get('tai_e_profiling', {}) if isinstance(result.get('tai_e_profiling', {}), dict) else {}
+    object_profile = result.get('object_profile', {}) if isinstance(result.get('object_profile', {}), dict) else {}
     
     # Extract CF-Explainer data
     cf_explanation = result.get('cf_explanation', {})
@@ -76,6 +83,7 @@ def generate_comprehensive_html_report(result: Dict[str, Any], report_dir: Path,
     variable_to_allocation_mappings = alias_analysis.get('variable_to_allocation_mappings', 0)
     library_summaries_loaded = alias_analysis.get('library_summaries_loaded', 0)
     object_sensitive_enabled = alias_analysis.get('object_sensitive_enabled', False)
+    tai_e_meta = alias_analysis.get('tai_e', {}) if isinstance(alias_analysis.get('tai_e'), dict) else {}
     
     # Advanced analysis metrics (2024 research)
     implicit_flows = taint_tracking.get('implicit_flows', {})
@@ -106,26 +114,42 @@ def generate_comprehensive_html_report(result: Dict[str, Any], report_dir: Path,
             </div>
         </div>
         
-        {_generate_capabilities_section()}
+        {_generate_capabilities_section(result)}
         
         {_generate_alias_analysis_section(
             variables_tracked, field_accesses, tainted_fields, allocation_sites,
             len(tainted_vars), len(sanitized_vars), len(taint_flows),
             refinement_iterations, cache_size, must_not_alias_pairs,
-            variable_to_allocation_mappings, library_summaries_loaded, object_sensitive_enabled
+            variable_to_allocation_mappings, library_summaries_loaded, object_sensitive_enabled, tai_e_meta
         )}
         
         {_generate_tainted_variables_section(tainted_vars, taint_assignments)}
         
         {_generate_tainted_fields_section(tainted_fields)}
+
+        {_generate_sanitizer_analysis_section(sanitizer_analysis)}
+
+        {_generate_framework_sink_section(framework_sinks)}
+
+        {_generate_template_engine_section(template_engine_analysis)}
+
+        {_generate_taint_graph_section(taint_graph)}
+
+        {_generate_soundness_section(soundness_validation)}
+
+        {_generate_profiling_section(tai_e_profiling)}
+
+        {_generate_object_profile_section(object_profile)}
         
-        {_generate_advanced_analysis_section(implicit_flows, context_sensitive, path_sensitive, native_code, interprocedural)}
+        {_generate_advanced_analysis_section(implicit_flows, context_sensitive, path_sensitive, native_code, interprocedural, object_sensitive_enabled, tai_e_meta)}
         
         {_generate_triage_checklist()}
         
-        {_generate_badges_section()}
+        {_generate_badges_section(result)}
         
         {_generate_findings_section(result)}
+
+        {_generate_sink_gating_section(result)}
         
         {_generate_file_links_section(result, report_dir)}
         
@@ -498,14 +522,16 @@ def _get_css_styles() -> str:
             background: white;
             text-align: center;
             min-height: 200px;
+            max-height: 420px;
             display: flex;
             align-items: center;
             justify-content: center;
+            overflow: auto;
         }
         
         .graph-preview img {
-            max-width: 100%;
-            max-height: 400px;
+            max-width: none;
+            max-height: none;
             cursor: pointer;
             border-radius: 4px;
             transition: opacity 0.2s;
@@ -708,18 +734,51 @@ def _generate_banner() -> str:
     </div>"""
 
 
-def _generate_capabilities_section() -> str:
+def _generate_capabilities_section(result: Dict[str, Any]) -> str:
     """Generate Advanced Analysis Capabilities section"""
-    return """<div class="section">
+    spatial = result.get("spatial_gnn", {}) if isinstance(result.get("spatial_gnn", {}), dict) else {}
+    gnn_enabled = bool(spatial.get("enabled", False))
+    gnn_forward = bool(result.get("gnn_utilized") or spatial.get("forward_called"))
+    gnn_weighted = bool(spatial.get("used_in_scoring", False))
+
+    if gnn_weighted:
+        gnn_status = "enabled (weighted in scoring)"
+    elif gnn_forward:
+        gnn_status = "inference executed (untrained)"
+    elif gnn_enabled:
+        gnn_status = "initialized (no inference executed)"
+    else:
+        gnn_status = "disabled"
+
+    cf_explanation = result.get("cf_explanation")
+    cf_enabled = bool(
+        cf_explanation
+        and isinstance(cf_explanation, dict)
+        and cf_explanation.get("counterfactual_explanation")
+    )
+    cf_status = "generated for this report" if cf_enabled else "not generated (flag disabled or no findings)"
+
+    joern_dataflow = result.get("joern_dataflow") or result.get("taint_tracking", {}).get("joern_dataflow")
+    joern_status = "enabled (reachableByFlows metrics)" if joern_dataflow else "not available"
+
+    alias_analysis = result.get("taint_tracking", {}).get("alias_analysis", {}) or {}
+    object_sensitive = bool(alias_analysis.get("object_sensitive_enabled"))
+    tai_e_meta = alias_analysis.get("tai_e", {}) if isinstance(alias_analysis.get("tai_e"), dict) else {}
+    tai_e_cs = tai_e_meta.get("cs")
+    if object_sensitive:
+        alias_status = f"Tai-e object-sensitive analysis ({tai_e_cs or 'obj'})"
+    else:
+        alias_status = "Heuristic field-sensitive analysis (assignment + allocation sites)"
+
+    return f"""<div class="section">
         <h3 style="color: #2c3e50; font-size: 20px; margin-bottom: 15px;">Advanced Analysis Capabilities</h3>
         <ul class="capabilities-list">
-            <li><strong>Multi-Graph Analysis</strong>: CFG, DFG, PDG, and CPG generation with 28+ artifacts</li>
-            <li><strong>GNN Processing</strong>: Graph Neural Networks with Bayesian uncertainty quantification</li>
-            <li><strong>Type-Based Alias Analysis (TBAA)</strong>: Enhanced precision with type compatibility filtering and must-alias detection</li>
-            <li><strong>Counterfactual Explanations</strong>: Research-grade vulnerability fix suggestions</li>
-            <li><strong>Joern Integration</strong>: 15+ analysis passes for comprehensive code understanding</li>
-            <li><strong>Evidence Spans</strong>: Precise line-level vulnerability evidence with confidence scores</li>
-            <li><strong>Graph Visualizations</strong>: Interactive PNG/SVG representations of code structure</li>
+            <li><strong>Multi-Graph Analysis</strong>: CFG/DFG/PDG generation when HTML report is enabled</li>
+            <li><strong>GNN Processing</strong>: {gnn_status}</li>
+            <li><strong>Alias Analysis</strong>: {alias_status}</li>
+            <li><strong>Counterfactual Explanations</strong>: {cf_status}</li>
+            <li><strong>Joern Dataflow</strong>: {joern_status}</li>
+            <li><strong>Graph Visualizations</strong>: PNG/SVG exports when Graphviz is available</li>
         </ul>
     </div>"""
 
@@ -728,15 +787,64 @@ def _generate_alias_analysis_section(variables_tracked, field_accesses, tainted_
                                      tainted_vars_count, sanitized_vars_count, taint_flows_count,
                                      refinement_iterations, cache_size, must_not_alias_pairs, 
                                      variable_to_allocation_mappings=0, library_summaries_loaded=0,
-                                     object_sensitive_enabled=False) -> str:
+                                     object_sensitive_enabled=False, tai_e_meta: Optional[Dict[str, Any]] = None) -> str:
     """Generate Alias Analysis v3.0 Results section with Object-Sensitive Analysis"""
     converged = "✓ Converged" if refinement_iterations > 0 else "Not run"
-    obj_sensitive_status = "✅ ENABLED" if object_sensitive_enabled else "❌ Disabled"
+    tai_e_meta = tai_e_meta if isinstance(tai_e_meta, dict) else {}
+    tai_e_enabled = bool(tai_e_meta.get("enabled"))
+    tai_e_errors = tai_e_meta.get("errors") if isinstance(tai_e_meta.get("errors"), list) else []
+
+    if object_sensitive_enabled:
+        obj_sensitive_status = "✅ Enabled"
+    elif tai_e_enabled:
+        obj_sensitive_status = "❌ Failed (see Tai-e logs)" if tai_e_errors else "❌ Failed"
+    else:
+        obj_sensitive_status = "N/A (not enabled)"
+    cache_label = f"{cache_size} cache entries" if cache_size > 0 else "N/A"
+    mapping_label = str(variable_to_allocation_mappings) if variable_to_allocation_mappings is not None else "N/A"
+    library_label = str(library_summaries_loaded) if library_summaries_loaded is not None else "N/A"
+    obj_header = "Tai-e" if tai_e_enabled or object_sensitive_enabled else "Tai-e (not enabled)"
+    synthetic_entry = bool(tai_e_meta.get("synthetic_entrypoint"))
+    if object_sensitive_enabled:
+        accuracy_gain = "+3-5% precision (literature estimate)"
+        obj_note = (
+            "Object-sensitive analysis uses allocation sites as context to distinguish objects created at different "
+            "program points, improving must-not-alias precision."
+        )
+        if synthetic_entry:
+            obj_note += " Entry point was auto-generated for coverage."
+        research_note = (
+            "Tai-e (context-sensitive pointer analysis), FSE 2024 (batch query ideas), "
+            "PLDI 2024 (refinement strategies)"
+        )
+    elif tai_e_enabled:
+        accuracy_gain = "N/A (failed)"
+        obj_note = "Tai-e execution failed in this run. Review Tai-e output logs for details."
+        research_note = (
+            "Tai-e (context-sensitive pointer analysis), FSE 2024 (batch query ideas), "
+            "PLDI 2024 (refinement strategies)"
+        )
+    else:
+        accuracy_gain = "N/A (not enabled)"
+        obj_note = "Object-sensitive analysis was not run. Enable Tai-e to compute these metrics."
+        research_note = "FSE 2024 (batch query ideas), PLDI 2024 (refinement strategies)"
+
+    object_sensitive_block = ""
+    if object_sensitive_enabled or tai_e_enabled:
+        object_sensitive_block = f"""
+            <div class="performance-box">
+                <h4>🎯 Object-Sensitive Analysis ({obj_header})</h4>
+                <p><strong>Status:</strong> {obj_sensitive_status}</p>
+                <p><strong>Allocation Site Mappings:</strong> {mapping_label} tracked</p>
+                <p><strong>JDK/Library Summaries:</strong> {library_label} loaded</p>
+                <p><strong>Accuracy Gain:</strong> {accuracy_gain}</p>
+                <p>{obj_note}</p>
+            </div>"""
     
     return f"""<div class="section">
         <div class="alias-header">
             <h3>🔬 Alias Analysis v3.0 Results</h3>
-            <p>Enhanced precision alias tracking with field-sensitivity, batch queries, and iterative refinement.</p>
+            <p>Enhanced precision alias tracking with field-sensitivity, cache reuse, and iterative refinement.</p>
         </div>
         
         <div class="metrics-grid">
@@ -772,7 +880,7 @@ def _generate_alias_analysis_section(variables_tracked, field_accesses, tainted_
                 <div class="metric-icon">🔓</div>
                 <div class="metric-label">Tainted Variables</div>
                 <div class="metric-value">{tainted_vars_count}</div>
-                <div class="metric-description">External input sources (OWASP/CWE)</div>
+                <div class="metric-description">Heuristic sources (OWASP/CWE-inspired)</div>
             </div>
             
             <div class="metric-card">
@@ -792,22 +900,15 @@ def _generate_alias_analysis_section(variables_tracked, field_accesses, tainted_
         
         <div class="performance-grid">
             <div class="performance-box">
-                <h4>⚙️ Refinement & Batch Query Performance</h4>
+                <h4>⚙️ Refinement & Cache Performance</h4>
                 <p><strong>Refinement Iterations:</strong> {refinement_iterations} {converged}</p>
-                <p><strong>Batch Queries:</strong> {cache_size if cache_size > 0 else 'N/A'} queries</p>
+                <p><strong>Alias Cache:</strong> {cache_label}</p>
                 <p><strong>Processing Mode:</strong> Sequential (optimal for fast queries)</p>
-                <p><strong>Must-Alias Pairs:</strong> 0 definite alias relationships (0 sets)</p>
+                <p><strong>Must-Alias Pairs:</strong> N/A (not computed)</p>
                 <p><strong>Must-NOT-Alias:</strong> {must_not_alias_pairs} proven non-aliases</p>
             </div>
             
-            <div class="performance-box">
-                <h4>🎯 Object-Sensitive Analysis (Tai-e v0.5.1)</h4>
-                <p><strong>Status:</strong> {obj_sensitive_status}</p>
-                <p><strong>Allocation Site Mappings:</strong> {variable_to_allocation_mappings} tracked</p>
-                <p><strong>JDK/Library Summaries:</strong> {library_summaries_loaded} loaded</p>
-                <p><strong>Accuracy Gain:</strong> +3-5% precision (PLDI 2024)</p>
-                <p>Object-sensitive analysis uses allocation sites as context to distinguish objects created at different program points, dramatically improving must-not-alias precision.</p>
-            </div>
+            {object_sensitive_block}
             
             <div class="performance-box">
                 <h4>💡 Performance Note</h4>
@@ -817,7 +918,7 @@ def _generate_alias_analysis_section(variables_tracked, field_accesses, tainted_
         </div>
         
         <div class="research-note">
-            <strong>Research Foundation:</strong> Tai-e v0.4.0 (Sept 2024), FSE 2024 (Batch Queries), PLDI 2024 (Refinement)
+            <strong>Research references (background):</strong> {research_note}
         </div>
     </div>"""
 
@@ -829,25 +930,25 @@ def _generate_tainted_variables_section(tainted_vars: List[str], taint_assignmen
     
     tainted_list_html = ""
     for var in tainted_vars:
-        source = taint_assignments.get(var, "External input taint source")
+        source = taint_assignments.get(var, "Heuristic taint source")
         tainted_list_html += f"<li><code>{var}</code> - <small>{source}</small></li>"
     
     return f"""<div class="section">
         <div class="tainted-box">
-            <h4>🔓 Tainted Variables (External Input Sources)</h4>
-            <p>The following variables receive untrusted input (OWASP/CWE 2024):</p>
+            <h4>🔓 Potentially Tainted Variables (Heuristic Sources)</h4>
+            <p>The following variables were marked tainted by heuristic and conservative rules; verify actual input sources:</p>
             <ul class="tainted-list">
                 {tainted_list_html}
             </ul>
             <div class="research-note">
-                <strong>Research:</strong> OWASP Top 10 2024 & CWE-20/CWE-502 - Parameters with types like <code>byte[]</code>, <code>InputStream</code>, <code>HttpServletRequest</code> are considered taint sources.
+                <strong>Note:</strong> Heuristic taint rules are inspired by OWASP/CWE source patterns; not every marked variable is guaranteed to be user-controlled.
             </div>
         </div>
     </div>"""
 
 
-def _generate_advanced_analysis_section(implicit_flows, context_sensitive, path_sensitive, native_code, interprocedural) -> str:
-    """Generate Advanced Analysis section with 2024 research features"""
+def _generate_advanced_analysis_section(implicit_flows, context_sensitive, path_sensitive, native_code, interprocedural, object_sensitive_enabled: bool = False, tai_e_meta: Optional[Dict[str, Any]] = None) -> str:
+    """Generate Advanced Analysis section with heuristic signals"""
     
     implicit_count = implicit_flows.get('count', 0)
     implicit_vars = implicit_flows.get('variables', {})
@@ -866,10 +967,35 @@ def _generate_advanced_analysis_section(implicit_flows, context_sensitive, path_
     methods_analyzed = interprocedural.get('methods_analyzed', 0)
     methods_with_tainted = interprocedural.get('methods_with_tainted_params', 0)
     
-    html = """
+    implicit_label = "Heuristic" if implicit_count else "Disabled"
+    context_label = "Heuristic (k-CFA)" if contexts_tracked else "Disabled"
+    if object_sensitive_enabled:
+        context_label = f"{context_label} + Tai-e"
+    path_label = "Experimental" if (branching_points or feasible_paths or infeasible_paths) else "Disabled"
+    native_label = "Experimental" if (native_methods or native_transfers) else "Disabled"
+    inter_label = "Heuristic" if methods_analyzed else "Disabled"
+
+    tai_e_meta = tai_e_meta if isinstance(tai_e_meta, dict) else {}
+    tai_e_enabled = bool(tai_e_meta.get("enabled"))
+    tai_e_errors = tai_e_meta.get("errors") if isinstance(tai_e_meta.get("errors"), list) else []
+    synthetic_entry = bool(tai_e_meta.get("synthetic_entrypoint"))
+
+    if object_sensitive_enabled:
+        advanced_note = "Heuristic signals plus Tai-e pointer analysis metrics (object-sensitive) were available in this run."
+        if synthetic_entry:
+            advanced_note += " Entry point was auto-generated for coverage."
+    elif tai_e_enabled:
+        if tai_e_errors:
+            advanced_note = "Tai-e was enabled but failed; showing heuristic signals only."
+        else:
+            advanced_note = "Tai-e was enabled but did not report object-sensitive metrics; showing heuristic signals only."
+    else:
+        advanced_note = "Heuristic signals only; enable Tai-e to add object-sensitive pointer metrics."
+
+    html = f"""
     <div class="section" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 10px; margin: 20px 0;">
         <h2 style="color: white; margin-bottom: 15px;">🔬 Advanced Taint Analysis</h2>
-        <p style="color: #f0f0f0; margin-bottom: 20px;">Research-backed techniques from ACM 2024, Tai-e v0.5.1, FSE 2024, and PLDI 2024</p>
+        <p style="color: #f0f0f0; margin-bottom: 20px;">{advanced_note}</p>
         
         <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px;">
 """
@@ -880,7 +1006,7 @@ def _generate_advanced_analysis_section(implicit_flows, context_sensitive, path_
                 <h4 style="color: #ffd700; margin: 0 0 10px 0;">⚡ Implicit Flows</h4>
                 <div style="font-size: 32px; font-weight: bold; margin: 10px 0;">{implicit_count}</div>
                 <div style="font-size: 14px; color: #e0e0e0;">Control dependencies tracked</div>
-                <div style="font-size: 12px; color: #b0b0b0; margin-top: 5px;">ACM 2024</div>
+                <div style="font-size: 12px; color: #b0b0b0; margin-top: 5px;">{implicit_label}</div>
             </div>
 """
     
@@ -890,7 +1016,7 @@ def _generate_advanced_analysis_section(implicit_flows, context_sensitive, path_
                 <h4 style="color: #00ff88; margin: 0 0 10px 0;">🎯 Context-Sensitive</h4>
                 <div style="font-size: 32px; font-weight: bold; margin: 10px 0;">{contexts_tracked}</div>
                 <div style="font-size: 14px; color: #e0e0e0;">Calling contexts (k={k_cfa})</div>
-                <div style="font-size: 12px; color: #b0b0b0; margin-top: 5px;">Tai-e v0.5.1</div>
+                <div style="font-size: 12px; color: #b0b0b0; margin-top: 5px;">{context_label}</div>
             </div>
 """
     
@@ -900,7 +1026,7 @@ def _generate_advanced_analysis_section(implicit_flows, context_sensitive, path_
                 <h4 style="color: #ff6b6b; margin: 0 0 10px 0;">🛤️ Path-Sensitive</h4>
                 <div style="font-size: 32px; font-weight: bold; margin: 10px 0;">{feasible_paths}/{branching_points}</div>
                 <div style="font-size: 14px; color: #e0e0e0;">Feasible paths / branches</div>
-                <div style="font-size: 12px; color: #b0b0b0; margin-top: 5px;">Symbolic Execution</div>
+                <div style="font-size: 12px; color: #b0b0b0; margin-top: 5px;">{path_label}</div>
             </div>
 """
     
@@ -910,7 +1036,7 @@ def _generate_advanced_analysis_section(implicit_flows, context_sensitive, path_
                 <h4 style="color: #4ecdc4; margin: 0 0 10px 0;">🔧 Native (JNI)</h4>
                 <div style="font-size: 32px; font-weight: bold; margin: 10px 0;">{native_transfers}/{native_methods}</div>
                 <div style="font-size: 14px; color: #e0e0e0;">Taint transfers / methods</div>
-                <div style="font-size: 12px; color: #b0b0b0; margin-top: 5px;">JNI Tracking</div>
+                <div style="font-size: 12px; color: #b0b0b0; margin-top: 5px;">{native_label}</div>
             </div>
 """
     
@@ -920,7 +1046,7 @@ def _generate_advanced_analysis_section(implicit_flows, context_sensitive, path_
                 <h4 style="color: #ffa500; margin: 0 0 10px 0;">🔗 Interprocedural</h4>
                 <div style="font-size: 32px; font-weight: bold; margin: 10px 0;">{methods_with_tainted}/{methods_analyzed}</div>
                 <div style="font-size: 14px; color: #e0e0e0;">Methods with taint / total</div>
-                <div style="font-size: 12px; color: #b0b0b0; margin-top: 5px;">TAJ System</div>
+                <div style="font-size: 12px; color: #b0b0b0; margin-top: 5px;">{inter_label}</div>
             </div>
 """
     
@@ -934,7 +1060,7 @@ def _generate_advanced_analysis_section(implicit_flows, context_sensitive, path_
         html += """
         <div class="section">
             <h3>⚡ Implicit Flow Details</h3>
-            <p>Variables tainted via control dependencies (ACM 2024):</p>
+            <p>Variables tainted via heuristic control-dependency signals:</p>
             <ul style="list-style: none; padding-left: 0;">
 """
         for var, deps in implicit_vars.items():
@@ -975,6 +1101,202 @@ def _generate_tainted_fields_section(tainted_fields: List[str]) -> str:
     </div>"""
 
 
+def _generate_sanitizer_analysis_section(sanitizer_analysis: Dict[str, Any]) -> str:
+    """Generate sanitizer detection/validation section."""
+    if not sanitizer_analysis:
+        return ""
+
+    effectiveness = sanitizer_analysis.get("effectiveness_by_sink", {}) if isinstance(sanitizer_analysis, dict) else {}
+    by_sink = sanitizer_analysis.get("by_sink", {}) if isinstance(sanitizer_analysis, dict) else {}
+    detected = sanitizer_analysis.get("detected", []) if isinstance(sanitizer_analysis, dict) else []
+
+    rows = []
+    for sink_name, score in effectiveness.items():
+        details = by_sink.get(sink_name, {})
+        recommendation = details.get("recommendation", "")
+        has_required = details.get("has_required", False)
+        status = "STRONG" if has_required else "WEAK"
+        status_color = "#27ae60" if has_required else "#f39c12"
+        rows.append(f"""
+        <tr>
+            <td><code>{sink_name}</code></td>
+            <td>{score:.2f}</td>
+            <td style="color:{status_color}; font-weight:600;">{status}</td>
+            <td>{recommendation}</td>
+        </tr>
+        """)
+
+    rows_html = "\n".join(rows) if rows else ""
+    detected_html = ""
+    if detected:
+        sample = detected[:6]
+        detected_html = "<ul>" + "".join(
+            f"<li><code>{item.get('name')}</code> @ L{item.get('line')}</li>" for item in sample
+        ) + "</ul>"
+
+    return f"""<div class="section">
+        <h3 style="color: #2c3e50; font-size: 20px; margin-bottom: 15px;">🧼 Sanitizer Analysis</h3>
+        <p style="margin-bottom: 12px; color: #6c7a89;">
+            Pattern-based sanitizer detection with sink-specific effectiveness scoring.
+        </p>
+        <div style="overflow-x: auto; margin-bottom: 16px;">
+            <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+                <thead>
+                    <tr style="background: #f5f7fa; text-align: left;">
+                        <th style="padding: 10px; border-bottom: 1px solid #e0e0e0;">Sink</th>
+                        <th style="padding: 10px; border-bottom: 1px solid #e0e0e0;">Effectiveness</th>
+                        <th style="padding: 10px; border-bottom: 1px solid #e0e0e0;">Strength</th>
+                        <th style="padding: 10px; border-bottom: 1px solid #e0e0e0;">Recommendation</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows_html}
+                </tbody>
+            </table>
+        </div>
+        {f"<div><strong>Detected Sanitizers (sample):</strong>{detected_html}</div>" if detected_html else ""}
+    </div>"""
+
+
+def _generate_framework_sink_section(framework_sinks: Dict[str, Any]) -> str:
+    """Generate framework sink detection section."""
+    if not framework_sinks:
+        return ""
+
+    matches = framework_sinks.get("matches", [])
+    frameworks = framework_sinks.get("frameworks", [])
+    unsafe_hits = framework_sinks.get("unsafe_hits_by_vuln", {})
+    safe_hits = framework_sinks.get("safe_hits_by_vuln", {})
+    autoescape_disabled = framework_sinks.get("autoescape_disabled", {})
+
+    if not matches:
+        return ""
+
+    match_rows = []
+    for match in matches[:10]:
+        sink_name = match.get("sink_name", "unknown")
+        framework = match.get("framework", "unknown")
+        vuln_type = match.get("vuln_type", "unknown")
+        line = match.get("line", 0)
+        safe_variant = match.get("safe_variant")
+        status = "SAFE" if safe_variant is True else ("UNSAFE" if safe_variant is False else "UNKNOWN")
+        status_color = "#27ae60" if safe_variant is True else ("#e74c3c" if safe_variant is False else "#95a5a6")
+        match_rows.append(f"""
+        <tr>
+            <td>{framework}</td>
+            <td><code>{sink_name}</code></td>
+            <td><code>{vuln_type}</code></td>
+            <td>L{line}</td>
+            <td style="color:{status_color}; font-weight:600;">{status}</td>
+        </tr>
+        """)
+
+    summary_lines = []
+    for vuln_type, count in unsafe_hits.items():
+        summary_lines.append(f"<li><code>{vuln_type}</code>: unsafe={count}, safe={safe_hits.get(vuln_type, 0)}</li>")
+    summary_html = "<ul>" + "".join(summary_lines) + "</ul>" if summary_lines else ""
+
+    autoescape_lines = []
+    for vuln_type, count in autoescape_disabled.items():
+        autoescape_lines.append(f"<li><code>{vuln_type}</code>: autoescape disabled ({count})</li>")
+    autoescape_html = "<ul>" + "".join(autoescape_lines) + "</ul>" if autoescape_lines else ""
+
+    frameworks_text = ", ".join(frameworks) if frameworks else "Unknown"
+
+    return f"""<div class="section">
+        <h3 style="color: #2c3e50; font-size: 20px; margin-bottom: 15px;">🏢 Framework Sink Detection</h3>
+        <p style="margin-bottom: 12px; color: #6c7a89;">
+            Detected framework-specific sinks for enterprise Java stacks. Frameworks: {frameworks_text}
+        </p>
+        {summary_html}
+        {autoescape_html}
+        <div style="overflow-x: auto; margin-top: 16px;">
+            <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+                <thead>
+                    <tr style="background: #f5f7fa; text-align: left;">
+                        <th style="padding: 10px; border-bottom: 1px solid #e0e0e0;">Framework</th>
+                        <th style="padding: 10px; border-bottom: 1px solid #e0e0e0;">Sink</th>
+                        <th style="padding: 10px; border-bottom: 1px solid #e0e0e0;">Vuln Type</th>
+                        <th style="padding: 10px; border-bottom: 1px solid #e0e0e0;">Line</th>
+                        <th style="padding: 10px; border-bottom: 1px solid #e0e0e0;">Safety</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {''.join(match_rows)}
+                </tbody>
+            </table>
+        </div>
+    </div>"""
+
+
+def _generate_template_engine_section(template_engine_analysis: Dict[str, Any]) -> str:
+    """Generate template engine auto-escaping analysis section."""
+    if not template_engine_analysis:
+        return ""
+
+    engines = template_engine_analysis.get("engines", [])
+    configs = template_engine_analysis.get("configs", [])
+    autoescape = template_engine_analysis.get("autoescape", {})
+    unsafe_variants = template_engine_analysis.get("unsafe_variants", [])
+    safety_scores = template_engine_analysis.get("safety_scores", {})
+
+    if not engines:
+        return ""
+
+    rows = []
+    for config in configs:
+        engine = config.get("engine", "unknown")
+        mode = config.get("auto_escape", "unknown")
+        confidence = config.get("confidence", 0.0)
+        score = safety_scores.get(engine, 0.0)
+        status_color = "#27ae60" if mode == "enabled" else ("#f39c12" if mode == "selective" else "#e74c3c")
+        rows.append(f"""
+        <tr>
+            <td><code>{engine}</code></td>
+            <td style="color:{status_color}; font-weight:600;">{mode}</td>
+            <td>{score:.2f}</td>
+            <td>{confidence:.2f}</td>
+        </tr>
+        """)
+
+    unsafe_preview = ""
+    if unsafe_variants:
+        unsafe_preview = "<ul>" + "".join(
+            f"<li><code>{item.get('engine')}</code> @ L{item.get('line')} — {item.get('snippet')}</li>"
+            for item in unsafe_variants[:5]
+        ) + "</ul>"
+
+    autoescape_summary = ""
+    if isinstance(autoescape, dict):
+        autoescape_summary = (
+            f"<p><strong>Auto-escape enabled:</strong> {', '.join(autoescape.get('enabled', [])) or 'none'}</p>"
+            f"<p><strong>Auto-escape disabled:</strong> {', '.join(autoescape.get('disabled', [])) or 'none'}</p>"
+            f"<p><strong>Auto-escape selective:</strong> {', '.join(autoescape.get('selective', [])) or 'none'}</p>"
+        )
+
+    return f"""<div class="section">
+        <h3 style="color: #2c3e50; font-size: 20px; margin-bottom: 15px;">🧩 Template Engine Analysis</h3>
+        <p style="margin-bottom: 12px; color: #6c7a89;">
+            Auto-escaping and safe/unsafe variant detection for Java template engines.
+        </p>
+        {autoescape_summary}
+        <div style="overflow-x: auto; margin-top: 16px;">
+            <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+                <thead>
+                    <tr style="background: #f5f7fa; text-align: left;">
+                        <th style="padding: 10px; border-bottom: 1px solid #e0e0e0;">Engine</th>
+                        <th style="padding: 10px; border-bottom: 1px solid #e0e0e0;">Auto-escape</th>
+                        <th style="padding: 10px; border-bottom: 1px solid #e0e0e0;">Safety Score</th>
+                        <th style="padding: 10px; border-bottom: 1px solid #e0e0e0;">Confidence</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {''.join(rows)}
+                </tbody>
+            </table>
+        </div>
+        {f"<div><strong>Unsafe variants (sample):</strong>{unsafe_preview}</div>" if unsafe_preview else ""}
+    </div>"""
 def _generate_triage_checklist() -> str:
     """Generate Triage Checklist section"""
     return """<div class="section">
@@ -991,18 +1313,60 @@ def _generate_triage_checklist() -> str:
     </div>"""
 
 
-def _generate_badges_section() -> str:
+def _generate_taint_graph_section(taint_graph: Dict[str, Any]) -> str:
+    if not taint_graph or not taint_graph.get("path"):
+        return ""
+    path = taint_graph.get("path")
+    return f"""<div class="section">
+        <h3 style="color: #2c3e50; font-size: 20px; margin-bottom: 15px;">🕸️ Taint Flow Graph</h3>
+        <p style="margin-bottom: 12px; color: #6c7a89;">
+            Interactive taint flow visualization generated from heuristic taint flows.
+        </p>
+        <p><a href="{path}">Open taint flow graph</a></p>
+    </div>"""
+
+
+def _generate_soundness_section(soundness_validation: Dict[str, Any]) -> str:
+    if not soundness_validation or not soundness_validation.get("report_path"):
+        return ""
+    status = "✅ Completed" if soundness_validation.get("success") else "⚠️ Failed"
+    report_path = soundness_validation.get("report_path")
+    return f"""<div class="section">
+        <h3 style="color: #2c3e50; font-size: 20px; margin-bottom: 15px;">🧪 Tai-e Soundness Validation</h3>
+        <p style="margin-bottom: 12px; color: #6c7a89;">
+            Runtime value logging compared against Tai-e points-to results (class-level mapping).
+        </p>
+        <p><strong>Status:</strong> {status}</p>
+        <p><a href="{report_path}">Open soundness report</a></p>
+    </div>"""
+
+
+def _generate_badges_section(result: Dict[str, Any]) -> str:
     """Generate Understanding Badges & Tags section"""
-    return """<div class="section">
+    spatial = result.get("spatial_gnn", {}) if isinstance(result.get("spatial_gnn", {}), dict) else {}
+    gnn_weighted = bool(spatial.get("used_in_scoring", False))
+    gnn_forward = bool(result.get("gnn_utilized") or spatial.get("forward_called"))
+    analysis_method = str(result.get("analysis_method", "")).lower()
+
+    if gnn_weighted:
+        vuln_desc = "The analysis (GNN-weighted) identified a security issue with a confidence score"
+    elif gnn_forward:
+        vuln_desc = "The analysis identified a security issue (GNN inference executed but untrained)"
+    elif "heuristic" in analysis_method:
+        vuln_desc = "The heuristic analysis identified a security issue with a confidence score"
+    else:
+        vuln_desc = "The analysis identified a security issue with a confidence score"
+
+    return f"""<div class="section">
         <div class="badges-section">
             <h3>🏷️ Understanding Badges & Tags</h3>
             
             <h4 style="margin-top: 20px;">💡 What the Badges Mean:</h4>
             <ul style="list-style: none; padding: 0;">
-                <li style="margin: 10px 0;"><span class="badge badge-vuln">VULN</span> <strong>- Vulnerability Detected</strong>: The GNN identified a security issue with confidence score</li>
-                <li style="margin: 10px 0;"><span class="badge badge-dfg-paths">DFG PATHS</span> <strong>- Data Flow Graph Paths</strong>: Text file showing how tainted data flows to security sinks</li>
+                <li style="margin: 10px 0;"><span class="badge badge-vuln">VULN</span> <strong>- Vulnerability Detected</strong>: {vuln_desc}</li>
+                <li style="margin: 10px 0;"><span class="badge badge-dfg-paths">DFG PATHS</span> <strong>- Taint Flow Paths</strong>: Text file showing taint flow evidence to sinks</li>
                 <li style="margin: 10px 0;"><span class="badge badge-dfg-dot">DFG DOT</span> <strong>- Graph Description</strong>: DOT format graph for Graphviz visualization</li>
-                <li style="margin: 10px 0;"><span class="badge badge-dfg-png">DFG PNG</span> <strong>- Visual Graph</strong>: Rendered image showing the program dependence graph</li>
+                <li style="margin: 10px 0;"><span class="badge badge-dfg-png">DFG PNG</span> <strong>- Visual Graph</strong>: Rendered image showing the data flow graph</li>
             </ul>
             
             <h4 style="margin-top: 30px;">🎯 What "Confirm Sink" Means:</h4>
@@ -1051,6 +1415,64 @@ def _generate_findings_section(result: Dict[str, Any]) -> str:
     </div>"""
 
 
+def _generate_sink_gating_section(result: Dict[str, Any]) -> str:
+    """Generate sink-specific gating section."""
+    gating = result.get("taint_gating", {})
+    decisions = gating.get("decisions", [])
+    if not decisions:
+        return ""
+
+    rows = []
+    for decision in decisions:
+        vuln = decision.get("vulnerability", "unknown")
+        passed = decision.get("passed", False)
+        confidence = decision.get("confidence", 0.0) or 0.0
+        threshold = decision.get("threshold")
+        evidence_types = decision.get("evidence_types", [])
+        flow_type = decision.get("flow_type", "unknown")
+
+        status = "ALLOW (KEEP)" if passed else "BLOCK (DROP)"
+        status_color = "#27ae60" if passed else "#e74c3c"
+        evidence_text = ", ".join(evidence_types) if evidence_types else "none"
+        threshold_text = f"{threshold:.2f}" if isinstance(threshold, (int, float)) else "-"
+
+        rows.append(f"""
+        <tr>
+            <td><code>{vuln}</code></td>
+            <td>{flow_type}</td>
+            <td>{confidence:.2f}</td>
+            <td>{threshold_text}</td>
+            <td style="color:{status_color}; font-weight:600;">{status}</td>
+            <td style="max-width: 420px; word-wrap: break-word;">{evidence_text}</td>
+        </tr>
+        """)
+
+    rows_html = "\n".join(rows)
+    return f"""<div class="section">
+        <h3 style="color: #2c3e50; font-size: 20px; margin-bottom: 15px;">🧪 Sink-Specific Gating</h3>
+        <p style="margin-bottom: 12px; color: #6c7a89;">
+            Evidence-based gating per sink (taint flow + sanitizer checks). Decision indicates
+            whether the vulnerability is kept or dropped after gating.
+        </p>
+        <div style="overflow-x: auto;">
+            <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+                <thead>
+                    <tr style="background: #f5f7fa; text-align: left;">
+                        <th style="padding: 10px; border-bottom: 1px solid #e0e0e0;">Sink</th>
+                        <th style="padding: 10px; border-bottom: 1px solid #e0e0e0;">Flow</th>
+                        <th style="padding: 10px; border-bottom: 1px solid #e0e0e0;">Confidence</th>
+                        <th style="padding: 10px; border-bottom: 1px solid #e0e0e0;">Threshold</th>
+                        <th style="padding: 10px; border-bottom: 1px solid #e0e0e0;">Decision</th>
+                        <th style="padding: 10px; border-bottom: 1px solid #e0e0e0;">Evidence</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows_html}
+                </tbody>
+            </table>
+        </div>
+    </div>"""
+
 def _generate_file_links_section(result: Dict[str, Any], report_dir: Path) -> str:
     """Generate file links row (VULN status | filename | confidence | paths | CFG | DFG | source)"""
     input_file = result.get('input', '')
@@ -1090,7 +1512,7 @@ def _generate_file_links_section(result: Dict[str, Any], report_dir: Path) -> st
         links.append(f'<a href="{filename}" style="color: #3498db; text-decoration: none; font-weight: 500;">source</a>')
     else:
         # Fallback if source file wasn't copied
-        links.append(f'<span style="color: #95a5a6; font-style: italic;">source</span>')
+        links.append('<span style="color: #95a5a6; font-style: italic;">source</span>')
     
     links_html = ' | '.join(links) if links else ''
     
@@ -1323,6 +1745,47 @@ def _generate_cf_explainer_section(cf_explanation: Dict[str, Any]) -> str:
     """
 
 
+def _generate_profiling_section(tai_e_profiling: Dict[str, Any]) -> str:
+    if not tai_e_profiling:
+        return ""
+    status = "✅ Completed" if tai_e_profiling.get("success") else "⚠️ Failed"
+    report_path = tai_e_profiling.get("report_path")
+    summary = tai_e_profiling.get("summary", {}) if isinstance(tai_e_profiling.get("summary", {}), dict) else {}
+    elapsed = summary.get("elapsed_time")
+    errors = tai_e_profiling.get("errors") or []
+    error_html = ""
+    if errors:
+        error_html = "<p><strong>Errors:</strong> " + ", ".join(errors) + "</p>"
+    link_html = f'<p><a href="{report_path}">Open profiling report</a></p>' if report_path else "<p>Report not generated.</p>"
+    elapsed_html = f"<p><strong>Elapsed:</strong> {elapsed:.2f}s</p>" if elapsed is not None else ""
+    return f"""
+    <div class="section">
+        <h4>🧪 Tai-e Profiling</h4>
+        <p><strong>Status:</strong> {status}</p>
+        {elapsed_html}
+        {error_html}
+        {link_html}
+    </div>
+    """
+
+
+def _generate_object_profile_section(object_profile: Dict[str, Any]) -> str:
+    if not object_profile:
+        return ""
+    status = "✅ Completed" if object_profile.get("success") else "⚠️ Failed"
+    report_path = object_profile.get("report_path")
+    error = object_profile.get("error")
+    error_html = f"<p><strong>Error:</strong> {error}</p>" if error else ""
+    link_html = f'<p><a href="{report_path}">Open object profiling report</a></p>' if report_path else "<p>Report not generated.</p>"
+    return f"""
+    <div class="section">
+        <h4>🧠 Object-Centric Memory Profiling</h4>
+        <p><strong>Status:</strong> {status}</p>
+        {error_html}
+        {link_html}
+    </div>
+    """
+
 def _generate_graph_gallery_section(report_dir: Path) -> str:
     """Generate Graph Gallery section with grid layout - auto-discovers all graph files"""
     graph_cards = []
@@ -1336,25 +1799,31 @@ def _generate_graph_gallery_section(report_dir: Path) -> str:
         # Determine graph type and description from filename
         if png_file.startswith('cfg_'):
             badge_class, badge_text = 'cfg', 'CFG'
-            description = f'Control Flow Graph (execution paths)'
+            description = 'Control Flow Graph (execution paths)'
             dot_file = png_file.replace('.png', '.dot')
         elif png_file.startswith('dfg_'):
             badge_class, badge_text = 'dfg', 'DFG'
-            description = f'Data Flow Graph (taint propagation)'
+            description = 'Data Flow Graph (taint propagation)'
             dot_file = png_file.replace('.png', '.dot')
         elif png_file.startswith('pdg_'):
             badge_class, badge_text = 'pdg', 'PDG'
-            description = f'Program Dependence Graph (CFG + DDG combined)'
+            description = 'Program Dependence Graph (CFG + DDG combined)'
             dot_file = png_file.replace('.png', '.dot')
         else:
             # Unknown graph type, skip
             continue
         
         dot_path = report_dir / dot_file
-        
+        svg_file = png_file.replace('.png', '.svg')
+        svg_path = report_dir / svg_file
+
         download_buttons = f'<a href="{png_file}" download class="download-btn download-{badge_class}">📥 Download {badge_text}</a>'
+        if svg_path.exists():
+            download_buttons += f' <a href="{svg_file}" download class="download-btn download-{badge_class}">📥 Download {badge_text} SVG</a>'
         if dot_path.exists():
             download_buttons += f' <a href="{dot_file}" download class="download-btn download-dot">📥 Download DOT</a>'
+
+        preview_src = svg_file if svg_path.exists() else png_file
         
         graph_cards.append(f"""
             <div class="graph-card">
@@ -1364,7 +1833,7 @@ def _generate_graph_gallery_section(report_dir: Path) -> str:
                 </div>
                 <div class="graph-card-description">{description}</div>
                 <div class="graph-preview">
-                    <img src="{png_file}" alt="{description}" onclick="window.open('{png_file}', '_blank')">
+                    <img src="{preview_src}" alt="{description}" onclick="window.open('{preview_src}', '_blank')">
                 </div>
                 <div class="graph-card-footer">
                     {download_buttons}
@@ -1373,7 +1842,7 @@ def _generate_graph_gallery_section(report_dir: Path) -> str:
             """)
     
     if not graph_cards:
-        return f"""<div class="section" id="graph-gallery">
+        return """<div class="section" id="graph-gallery">
         <h2 class="section-title">📊 Graph Gallery</h2>
         <p style="color: #7f8c8d; padding: 20px; background: #f8f9fa; border-radius: 8px;">
             <em>No graph visualizations available. Use <code>--export-dfg</code>, <code>--export-cfg</code>, or <code>--export-pdg</code> to generate graphs.</em>
@@ -1505,9 +1974,10 @@ def _generate_legend_section() -> str:
                 <li style="margin-bottom: 20px; padding: 15px; background: #f8f9fa; border-radius: 6px;">
                     <strong style="color: #9b59b6; font-size: 16px;">DFG (Data Flow Graph)</strong>
                     <p style="margin: 8px 0 0 0; color: #555; line-height: 1.6;">
-                        Shows how <strong style="color: #E6E6FA; background: #7d3c98; padding: 2px 6px; border-radius: 3px;">tainted data</strong> propagates from sources to sinks. 
-                        Includes AST structure (gray), control flow (French blue), and data dependencies (red dotted). 
-                        The <code style="background: #e8e8e8; padding: 2px 6px; border-radius: 3px;">dfg_paths.txt</code> file contains textual flow descriptions.
+                        Shows data dependencies between variables and expressions. Includes AST structure (gray),
+                        control flow (French blue), and data dependencies (red dotted).
+                        The <code style="background: #e8e8e8; padding: 2px 6px; border-radius: 3px;">dfg_paths.txt</code>
+                        file summarizes taint-flow evidence used in gating decisions.
                     </p>
                 </li>
                 
@@ -1524,9 +1994,10 @@ def _generate_legend_section() -> str:
         <div style="background: #fff3cd; padding: 15px; border-left: 4px solid #ffc107; border-radius: 4px; margin-top: 15px;">
             <strong style="color: #856404;">💡 Analysis Tip:</strong>
             <p style="color: #856404; margin: 8px 0 0 0;">
-                Look for <span style="background: #E6E6FA; color: #7d3c98; padding: 2px 6px; border-radius: 3px; font-weight: bold;">lavender (tainted) nodes</span> 
-                connected by <span style="color: #DC143C; font-weight: bold;">red dotted data flow lines</span> to security-sensitive sinks. 
-                This pattern indicates potential vulnerabilities where untrusted input reaches dangerous functions.
+                Follow <span style="color: #DC143C; font-weight: bold;">red dotted data-dependency lines</span>
+                from untrusted sources toward sink calls, and correlate with
+                <code style="background: #fff3cd; padding: 2px 6px; border-radius: 3px;">dfg_paths.txt</code>
+                for taint-flow evidence.
             </p>
         </div>
     </div>"""
@@ -1537,8 +2008,8 @@ def _generate_footer() -> str:
     return """<div class="footer">
         <small>
             Generated by <strong>Bean Vulnerable GNN Framework v2.0.0</strong><br>
-            Research Foundation: OWASP Top 10 2024, CWE-20/CWE-502, ACM 2024, Tai-e v0.4.0 (Sept 2024), FSE 2024, PLDI 2024, Seneca (arXiv Nov 2023)<br>
-            Advanced features: 3-Tier Taint Tracking, Field-Sensitive Alias Analysis, Bayesian Uncertainty Quantification, CESCL Loss
+            Research references (inspiration; not all integrations enabled): OWASP Top 10 2024, CWE-20/CWE-502, Tai-e pointer analysis, FSE/PLDI alias-analysis literature, Seneca (arXiv 2023)<br>
+            Features used in this report depend on enabled flags (e.g., GNN inference, counterfactuals, Joern dataflow)
         </small>
     </div>"""
 
