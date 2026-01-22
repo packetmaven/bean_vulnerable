@@ -4,10 +4,48 @@ Basic tests for Bean Vulnerable GNN Framework
 """
 
 import unittest
+import warnings
 import sys
 import os
 import shutil
 from pathlib import Path
+
+# Silence known non-fatal warnings from optional deps in tests
+warnings.filterwarnings(
+    "ignore",
+    message=r"An issue occurred while importing 'pyg-lib'.*",
+    category=UserWarning,
+)
+warnings.filterwarnings(
+    "ignore",
+    message=r"An issue occurred while importing 'torch-scatter'.*",
+    category=UserWarning,
+)
+warnings.filterwarnings(
+    "ignore",
+    message=r"An issue occurred while importing 'torch-sparse'.*",
+    category=UserWarning,
+)
+warnings.filterwarnings(
+    "ignore",
+    message=r"builtin type SwigPyPacked has no __module__ attribute",
+    category=DeprecationWarning,
+)
+warnings.filterwarnings(
+    "ignore",
+    message=r"builtin type SwigPyObject has no __module__ attribute",
+    category=DeprecationWarning,
+)
+warnings.filterwarnings(
+    "ignore",
+    message=r"builtin type swigvarlink has no __module__ attribute",
+    category=DeprecationWarning,
+)
+warnings.filterwarnings(
+    "ignore",
+    message=r"`resume_download` is deprecated.*",
+    category=FutureWarning,
+)
 
 # Avoid NumPy import issues in test environments
 os.environ.setdefault("BEAN_VULN_DISABLE_NUMPY", "1")

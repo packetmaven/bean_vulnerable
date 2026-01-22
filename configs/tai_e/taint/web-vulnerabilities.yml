@@ -1,0 +1,50 @@
+---
+# Tai-e taint configuration (template).
+# Extend with project-specific sources/sinks/transfers.
+
+sources:
+  - kind: call
+    method: "<javax.servlet.ServletRequest: java.lang.String getParameter(java.lang.String)>"
+    index: result
+  - kind: call
+    method: "<javax.servlet.ServletRequest: java.lang.String getHeader(java.lang.String)>"
+    index: result
+  - kind: call
+    method: "<javax.servlet.http.HttpServletRequest: java.lang.String getQueryString()>"
+    index: result
+
+sinks:
+  - method: "<java.sql.Statement: java.sql.ResultSet executeQuery(java.lang.String)>"
+    index: 0
+  - method: "<java.sql.Statement: boolean execute(java.lang.String)>"
+    index: 0
+  - method: "<java.lang.Runtime: java.lang.Process exec(java.lang.String)>"
+    index: 0
+  - method: "<java.lang.ProcessBuilder: java.lang.ProcessBuilder command(java.lang.String[])>"
+    index: 0
+  - method: "<java.io.File: void <init>(java.lang.String)>"
+    index: 0
+  - method: "<javax.el.ValueExpression: java.lang.Object getValue(javax.el.ELContext)>"
+    index: base
+
+transfers:
+  - method: "<java.lang.StringBuilder: java.lang.StringBuilder append(java.lang.String)>"
+    from: 0
+    to: base
+  - method: "<java.lang.StringBuilder: java.lang.String toString()>"
+    from: base
+    to: result
+  - method: "<java.lang.String: java.lang.String concat(java.lang.String)>"
+    from: base
+    to: result
+  - method: "<java.lang.String: java.lang.String concat(java.lang.String)>"
+    from: 0
+    to: result
+
+sanitizers:
+  - kind: param
+    method: "<org.owasp.encoder.Encode: java.lang.String forHtml(java.lang.String)>"
+    index: 0
+  - kind: param
+    method: "<org.owasp.encoder.Encode: java.lang.String forJavaScript(java.lang.String)>"
+    index: 0

@@ -27,6 +27,15 @@ from dataclasses import dataclass, field
 from collections import defaultdict
 import time
 
+try:
+    from .taie_integration import TaiEConfig, TaiEIntegration, TaiEResult
+    TAIE_AVAILABLE = True
+except Exception:  # pragma: no cover - optional dependency
+    TaiEConfig = None  # type: ignore
+    TaiEIntegration = None  # type: ignore
+    TaiEResult = None  # type: ignore
+    TAIE_AVAILABLE = False
+
 
 @dataclass
 class AllocationSite:
@@ -295,17 +304,26 @@ class ComprehensiveTaintTracker:
         'parseInt', 'parseDouble', 'parseLong', 'parseFloat',
         'setString', 'setInt', 'setLong',  # PreparedStatement methods
         'valueOf', 'strip', 'sanitize', 'validate', 'clean', 'filter',
-        'URLEncoder.encode', 'HtmlUtils.htmlEscape', 'StringEscapeUtils'
+        'URLEncoder.encode', 'HtmlUtils.htmlEscape', 'StringEscapeUtils',
+        'escapeHtml4', 'escapeHtml5', 'encodeForHTML', 'encodeForHtml',
+        'encodeForURL', 'encodeForUrl', 'encodeForUriComponent',
+        'Encode.forHtml', 'Encode.forHtmlAttribute', 'Encode.forJavaScript',
+        'ESAPI.encoder', 'PolicyFactory.sanitize', 'Jsoup.clean',
+        'getCanonicalPath', 'getCanonicalFile', 'toRealPath', 'normalize'
     }
     
-    def __init__(self, alias_analyzer: Optional[EnhancedAliasAnalyzer] = None):
+    def __init__(self, alias_analyzer: Optional[EnhancedAliasAnalyzer] = None, tai_e_config: Optional["TaiEConfig"] = None):
         self.logger = logging.getLogger(__name__)
         self.alias_analyzer = alias_analyzer or EnhancedAliasAnalyzer()
+        self.tai_e_config = tai_e_config
+        self.tai_e_result: Optional["TaiEResult"] = None
         self.tainted_variables: Set[str] = set()
         self.sanitized_variables: Set[str] = set()
         self.taint_flows: List[Dict[str, Any]] = []
         self.taint_assignments: Dict[str, str] = {}  # var -> source
         self.tainted_fields: Set[str] = set()
+        self.sanitizer_analysis: Dict[str, Any] = {}
+        self.template_engine_analysis: Dict[str, Any] = {}
         
         # Advanced Taint Tracking Metrics
         self.implicit_flows: Dict[str, List[str]] = defaultdict(list)  # var -> control dependencies
@@ -325,7 +343,7 @@ class ComprehensiveTaintTracker:
             'call_graph': defaultdict(list)
         }
         
-    def analyze_java_code(self, source_code: str) -> Dict[str, Any]:
+    def analyze_java_code(self, source_code: str, source_path: Optional[str] = None) -> Dict[str, Any]:
         """Comprehensive taint analysis of Java source code"""
         lines = source_code.split('\n')
         
@@ -350,8 +368,49 @@ class ComprehensiveTaintTracker:
         self._track_path_sensitive(lines)
         self._track_native_code(lines)
         self._track_interprocedural(lines)
+        self._detect_sanitizers_advanced(lines)
+        self._detect_template_engines(lines)
         
+        self._run_tai_e(source_code, source_path)
         return self.get_results()
+
+    def _run_tai_e(self, source_code: str, source_path: Optional[str]) -> None:
+        if not TAIE_AVAILABLE or not self.tai_e_config or not getattr(self.tai_e_config, "enabled", False):
+            return
+        if self.tai_e_result is not None:
+            return
+        try:
+            runner = TaiEIntegration(self.tai_e_config)
+            self.tai_e_result = runner.run(source_code, source_path)
+            if self.tai_e_result and not self.tai_e_result.success:
+                self.logger.warning("Tai-e analysis failed: %s", ", ".join(self.tai_e_result.errors))
+        except Exception as exc:
+            self.logger.warning("Tai-e integration failed: %s", exc)
+            self.tai_e_result = None
+
+    def _detect_sanitizers_advanced(self, lines: List[str]) -> None:
+        """Advanced sanitizer detection with sink-specific effectiveness."""
+        try:
+            from .sanitizer_detection import JavaSanitizerAnalyzer
+        except Exception as exc:  # pragma: no cover - optional module
+            self.logger.debug(f"Sanitizer analyzer unavailable: {exc}")
+            self.sanitizer_analysis = {}
+            return
+
+        analyzer = JavaSanitizerAnalyzer(lines)
+        self.sanitizer_analysis = analyzer.analyze()
+
+    def _detect_template_engines(self, lines: List[str]) -> None:
+        """Detect template engines and auto-escaping configuration."""
+        try:
+            from .template_engine_analyzer import TemplateEngineAnalyzer
+        except Exception as exc:  # pragma: no cover - optional module
+            self.logger.debug(f"Template engine analyzer unavailable: {exc}")
+            self.template_engine_analysis = {}
+            return
+
+        analyzer = TemplateEngineAnalyzer()
+        self.template_engine_analysis = analyzer.analyze("\n".join(lines))
         
     def _detect_taint_sources(self, lines: List[str]):
         """3-Tier taint source detection"""
@@ -422,6 +481,19 @@ class ComprehensiveTaintTracker:
                 if var_name != 'this':
                     type_name = full_type_name.split('.')[-1] if '.' in full_type_name else full_type_name
                     self.alias_analyzer.register_allocation_site(var_name, type_name, i, full_type_name)
+
+            # Pattern 1b: field assignment with new (obj.field = new ClassName())
+            field_allocations = re.findall(r'(\w+)\.(\w+)\s*=\s*new\s+([\w.]+)(?:\[\]|\[[^\]]*\]|\()', line)
+            for obj_name, field_name, full_type_name in field_allocations:
+                field_var = f"{obj_name}.{field_name}"
+                type_name = full_type_name.split('.')[-1] if '.' in full_type_name else full_type_name
+                self.alias_analyzer.register_allocation_site(field_var, type_name, i, full_type_name)
+
+            # Pattern 1c: return new ClassName()
+            return_allocations = re.findall(r'\breturn\s+new\s+([\w.]+)(?:\[\]|\[[^\]]*\]|\()', line)
+            for full_type_name in return_allocations:
+                type_name = full_type_name.split('.')[-1] if '.' in full_type_name else full_type_name
+                self.alias_analyzer.register_allocation_site(f"return@L{i}", type_name, i, full_type_name)
             
             # Pattern 2: Reflection/Factory methods (newInstance, getInstance, create, etc.)
             factory_allocations = re.findall(r'(\w+)\s*=\s*(\w+)\.(newInstance|getInstance|create\w*|valueOf|parse\w+)\s*\(', line)
@@ -431,13 +503,11 @@ class ComprehensiveTaintTracker:
                     self.alias_analyzer.register_allocation_site(var_name, alloc_type, i, alloc_type)
             
             # Handle field accesses (for alias analysis integration)
-            # Pattern: object.field or object.getField()
-            field_accesses = re.findall(r'(\w+)\.(\w+)', line)
-            for base_var, field_or_method in field_accesses:
-                if base_var in self.tainted_variables or field_or_method.startswith('get'):
-                    self.alias_analyzer.register_field_access(base_var, field_or_method)
-                    # Track assignment relationships for alias analysis
-                    self.alias_analyzer.register_assignment(field_or_method, base_var)
+            # Pattern: object.field (exclude method calls)
+            field_accesses = re.findall(r'(\w+)\.(\w+)\b(?!\s*\()', line)
+            for base_var, field_name in field_accesses:
+                self.alias_analyzer.register_field_access(base_var, field_name)
+                self.alias_analyzer.register_assignment(f"{base_var}.{field_name}", base_var)
                     
             # Direct assignment: target = taintedVar
             direct_assigns = re.findall(r'(\w+)\s*=\s*(\w+)\s*[;,)]', line)
@@ -446,6 +516,15 @@ class ComprehensiveTaintTracker:
                     self.tainted_variables.add(target)
                     self.taint_assignments[target] = f"{source}(direct)"
                     self.logger.debug(f"Direct taint: {source} -> {target} @ L{i}")
+
+            # Field read: target = obj.field
+            field_reads = re.findall(r'(\w+)\s*=\s*(\w+)\.(\w+)\b(?!\s*\()', line)
+            for target, obj, field_name in field_reads:
+                field_key = f"{obj}.{field_name}"
+                if field_key in self.tainted_fields and target not in self.sanitized_variables:
+                    self.tainted_variables.add(target)
+                    self.taint_assignments[target] = f"{field_key}(field)"
+                    self.logger.debug(f"Field taint: {field_key} -> {target} @ L{i}")
                     
             # String concatenation: target = str1 + str2
             concat_pattern = r'(\w+)\s*=\s*([^=;]+)\+\s*([^;]+);'
@@ -513,13 +592,20 @@ class ComprehensiveTaintTracker:
         """Detect fields that receive tainted data"""
         for i, line in enumerate(lines, 1):
             # Pattern: obj.field = taintedVar or obj.setField(taintedVar)
-            field_assigns = re.findall(r'(\w+)\.(\w+)\s*=\s*(\w+)', line)
-            for obj, field_name, source in field_assigns:
-                if source in self.tainted_variables and source not in self.sanitized_variables:
+            field_assigns = re.findall(r'(\w+)\.(\w+)\s*=\s*([^;]+)', line)
+            for obj, field_name, rhs in field_assigns:
+                rhs_vars = re.findall(r'\b(\w+)\b', rhs)
+                tainted_sources = [
+                    var for var in rhs_vars
+                    if var in self.tainted_variables and var not in self.sanitized_variables
+                ]
+                if tainted_sources:
                     full_field_name = f"{obj}.{field_name}"
                     self.tainted_fields.add(full_field_name)
                     self.alias_analyzer.register_field_access(obj, field_name)
-                    self.logger.debug(f"Tainted field: {full_field_name} = {source} @ L{i}")
+                    self.logger.debug(
+                        f"Tainted field: {full_field_name} <- {', '.join(tainted_sources)} @ L{i}"
+                    )
                     
             # Pattern: obj.setAttribute("key", taintedVar)
             attr_sets = re.findall(r'(\w+)\.(setAttribute|put|add)\s*\([^,]+,\s*(\w+)\)', line)
@@ -904,6 +990,17 @@ class ComprehensiveTaintTracker:
         # Pass all tracked variables (tainted + sanitized) to alias analyzer for proper counting
         all_tracked_vars = self.tainted_variables | self.sanitized_variables
         alias_stats = self.alias_analyzer.get_statistics(additional_vars=all_tracked_vars)
+        alias_stats.setdefault('object_sensitive_enabled', False)
+        alias_stats.setdefault('variable_to_allocation_mappings', None)
+        alias_stats.setdefault('library_summaries_loaded', None)
+
+        if self.tai_e_result:
+            alias_stats['object_sensitive_enabled'] = bool(
+                self.tai_e_result.success and self.tai_e_result.object_sensitive
+            )
+            alias_stats['variable_to_allocation_mappings'] = self.tai_e_result.variable_to_allocation_mappings
+            alias_stats['library_summaries_loaded'] = self.tai_e_result.library_summaries_loaded
+            alias_stats['tai_e'] = self.tai_e_result.to_dict()
         
         # Calculate implicit flows metrics
         implicit_flows_count = sum(len(deps) for deps in self.implicit_flows.values())
@@ -937,6 +1034,8 @@ class ComprehensiveTaintTracker:
             'taint_flows_count': len(self.taint_flows),
             'alias_analysis': alias_stats,
             'taint_assignments': self.taint_assignments,
+            'sanitizer_analysis': self.sanitizer_analysis,
+            'template_engine_analysis': self.template_engine_analysis,
             
             # Advanced Taint Tracking (ACM 2024, FSE 2024, PLDI 2024)
             'implicit_flows': {
