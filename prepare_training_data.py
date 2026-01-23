@@ -24,6 +24,7 @@ from torch_geometric.data import Data, Dataset
 import pickle
 from tqdm import tqdm
 import random
+import os
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -59,6 +60,16 @@ VULNERABILITY_TYPES = {
 }
 
 
+def _build_joern_env() -> Dict[str, str]:
+    env = dict(os.environ)
+    java_opts = env.get("JAVA_TOOL_OPTIONS", "")
+    if "-Dfile.encoding=UTF-8" not in java_opts:
+        env["JAVA_TOOL_OPTIONS"] = (java_opts + " " if java_opts else "") + "-Dfile.encoding=UTF-8"
+    env.setdefault("LC_ALL", "en_US.UTF-8")
+    env.setdefault("LANG", "en_US.UTF-8")
+    return env
+
+
 def extract_cpg_structure(java_file: Path, output_dir: Path, timeout: int = 480) -> Dict:
     """
     Extract CPG structure using Joern script
@@ -80,10 +91,23 @@ def extract_cpg_structure(java_file: Path, output_dir: Path, timeout: int = 480)
         "--param", f"outputDir={output_dir}"
     ]
     
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        env=_build_joern_env(),
+    )
     
     if result.returncode != 0:
-        LOG.error(f"CPG extraction failed for {java_file}: {result.stderr}")
+        stderr = (result.stderr or "").strip()
+        stdout = (result.stdout or "").strip()
+        combined = stderr or stdout
+        if "UnsupportedClassVersionError" in combined or "class file version 55.0" in combined:
+            LOG.error("Joern requires Java 11+. Set JAVA_HOME to a JDK 11+ before training.")
+        if "MalformedInputException" in combined:
+            LOG.error("Joern failed to read source; ensure UTF-8 locale or set JAVA_TOOL_OPTIONS=-Dfile.encoding=UTF-8.")
+        LOG.error(f"CPG extraction failed for {java_file}: {combined}")
         return None
     
     cpg_file = output_dir / "cpg_structure.json"
@@ -286,6 +310,9 @@ def prepare_dataset(
                 continue
     
     LOG.info(f"✅ Successfully processed {len(dataset)} files")
+    if not dataset:
+        LOG.error("No CPGs extracted. Verify Java 11+ and UTF-8 locale for Joern.")
+        return
     
     # Split dataset
     random.seed(seed)
