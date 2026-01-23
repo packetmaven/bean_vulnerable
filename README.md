@@ -859,6 +859,17 @@ Notes:
 - `tools/jpf/site.properties` is used so JPF does **not** require `~/.jpf`.
   It assumes `bin/jpf` is launched from `tools/jpf/jpf-core-symbc` so
   `${user.dir}` resolves to the correct paths.
+- `ExSymExe.jpf` defaults to `symbolic.dp=no_solver` for a fast, stable demo run. Override it with `+symbolic.dp=z3` (or another solver) when you want full solver-backed execution.
+
+Solver-backed run (explicit override):
+```bash
+JVM_FLAGS="-Xmx1024m -ea -Djava.library.path=$(pwd)/tools/jpf/jpf-symbc/lib" \
+  ./tools/jpf/jpf-core-symbc/bin/jpf \
+  +symbolic.dp=z3 \
+  +jvm.insn_factory.class=gov.nasa.jpf.symbc.SymbolicInstructionFactory \
+  ./tools/jpf/jpf-symbc/src/tests/gov/nasa/jpf/symbc/ExSymExe.jpf
+```
+
 - `tools/jdart/local.properties` wires jConstraints/Z3 jars for the local build.
 - `tools/z3` includes a small patch for macOS clang compatibility.
 
@@ -949,6 +960,14 @@ pass a checkpoint via `--gnn-checkpoint`.
 # 0) (Optional) Download Juliet dataset for real training
 git clone --depth 1 https://github.com/find-sec-bugs/juliet-test-suite.git datasets/juliet-test-suite
 
+# (Required for Joern) Use Java 11+ and UTF-8 locale
+# - Adjust JAVA_HOME for your system if needed.
+export JAVA_HOME="/opt/homebrew/opt/openjdk@11/libexec/openjdk.jdk/Contents/Home"
+export PATH="$JAVA_HOME/bin:$PATH"
+export JAVA_TOOL_OPTIONS="-Dfile.encoding=UTF-8"
+export LC_ALL="en_US.UTF-8"
+export LANG="en_US.UTF-8"
+
 # 1) (Optional) Quick smoke training on test samples
 ./venv_bean_311/bin/python analysis/train_spatial_gnn_pipeline.py \
   --input tests/samples \
@@ -975,6 +994,24 @@ bean-vuln tests/samples/VUL001_SQLInjection_Basic.java \
   --gnn-temperature 1.0 \
   --gnn-ensemble 1 \
   --summary
+
+# 4) Verify GNN forward path + scoring flags
+bean-vuln tests/samples/VUL001_SQLInjection_Basic.java \
+  --gnn-checkpoint checkpoints/spatial_gnn/juliet/best_model.pt \
+  --gnn-weight 0.6 \
+  --gnn-confidence-threshold 0.5 \
+  --gnn-temperature 1.0 \
+  --gnn-ensemble 1 \
+  --summary \
+  --out analysis/gnn_smoke.json
+./venv_bean_311/bin/python - <<'PY'
+import json
+payload = json.load(open("analysis/gnn_smoke.json"))[0]
+print("gnn_utilized", payload.get("gnn_utilized"))
+print("gnn_forward_called", payload.get("gnn_forward_called"))
+print("spatial_gnn.initialized", payload.get("spatial_gnn", {}).get("initialized"))
+print("spatial_gnn.used_in_scoring", payload.get("spatial_gnn", {}).get("used_in_scoring"))
+PY
 ```
 
 Notes:
@@ -982,6 +1019,15 @@ Notes:
   `best_model_path` field so you can locate the correct file.
 - For meaningful results, increase `--epochs` and remove `--limit` once the
   quick run is validated.
+- Joern requires Java 11+. If you see `UnsupportedClassVersionError`, set
+  `JAVA_HOME` to a JDK 11+ (e.g. Homebrew `openjdk@11`) before running the
+  pipeline.
+- If Joern fails with `MalformedInputException`, set
+  `JAVA_TOOL_OPTIONS=-Dfile.encoding=UTF-8` (or run with a UTF-8 locale) so
+  sources are parsed correctly.
+- On Apple Silicon, PyG may warn about `pyg-lib`/`torch-sparse` binaries. The
+  pipeline still runs, but it will be slower; build those packages from source
+  if you want to remove the warnings.
 
 ### Cross-Validation Summary
 ```bash
