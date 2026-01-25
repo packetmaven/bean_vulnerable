@@ -1,5 +1,6 @@
-import javax.naming.directory.*;
+import javax.naming.NamingEnumeration;
 import javax.naming.NamingException;
+import javax.naming.directory.*;
 
 public class VUL007_LDAP_Injection {
     public void vulnerableLDAPSearch(String username) throws NamingException {

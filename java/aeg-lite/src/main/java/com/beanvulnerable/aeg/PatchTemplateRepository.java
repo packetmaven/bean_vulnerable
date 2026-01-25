@@ -374,16 +374,16 @@ public class PatchTemplateRepository {
         templates.add(new PatchTemplate(
             "el_002",
             "el_injection",
-            "(?s)(\\w+)\\.createValueExpression\\(([^,]+),",
-            "$1.createValueExpression(sanitizeElExpression($2),",
+            "(?s)(\\w+)\\.createValueExpression\\(([^,]+),\\s*([^,]+),",
+            "$1.createValueExpression($2, sanitizeElExpression($3),",
             95
         ));
 
         templates.add(new PatchTemplate(
             "el_003",
             "el_injection",
-            "(?s)(\\w+)\\.createMethodExpression\\(([^,]+),",
-            "$1.createMethodExpression(sanitizeElExpression($2),",
+            "(?s)(\\w+)\\.createMethodExpression\\(([^,]+),\\s*([^,]+),",
+            "$1.createMethodExpression($2, sanitizeElExpression($3),",
             95
         ));
 

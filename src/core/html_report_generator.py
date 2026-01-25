@@ -820,6 +820,13 @@ def _generate_capabilities_section(result: Dict[str, Any]) -> str:
     joern_dataflow = result.get("joern_dataflow") or result.get("taint_tracking", {}).get("joern_dataflow")
     joern_status = "enabled (reachableByFlows metrics)" if joern_dataflow else "not available"
 
+    analysis_config = result.get("analysis_config", {}) if isinstance(result.get("analysis_config", {}), dict) else {}
+    sink_preset = analysis_config.get("sink_signature_preset") or result.get("sink_signature_preset")
+    if sink_preset:
+        sink_status = f"{_escape_html(sink_preset)} (reserved; no effect in this build)"
+    else:
+        sink_status = "default (no preset)"
+
     alias_analysis = result.get("taint_tracking", {}).get("alias_analysis", {}) or {}
     object_sensitive = bool(alias_analysis.get("object_sensitive_enabled"))
     tai_e_meta = alias_analysis.get("tai_e", {}) if isinstance(alias_analysis.get("tai_e"), dict) else {}
@@ -837,6 +844,7 @@ def _generate_capabilities_section(result: Dict[str, Any]) -> str:
             <li><strong>Alias Analysis</strong>: {alias_status}</li>
             <li><strong>Counterfactual Explanations</strong>: {cf_status}</li>
             <li><strong>Joern Dataflow</strong>: {joern_status}</li>
+            <li><strong>Sink Signature Preset</strong>: {sink_status}</li>
             <li><strong>Graph Visualizations</strong>: PNG/SVG exports when Graphviz is available</li>
         </ul>
     </div>"""
@@ -1437,6 +1445,15 @@ def _generate_badges_section(result: Dict[str, Any]) -> str:
     gnn_weighted = bool(spatial.get("used_in_scoring", False))
     gnn_forward = bool(result.get("gnn_utilized") or spatial.get("forward_called"))
     analysis_method = str(result.get("analysis_method", "")).lower()
+    analysis_config = result.get("analysis_config", {}) if isinstance(result.get("analysis_config", {}), dict) else {}
+    sink_preset = analysis_config.get("sink_signature_preset") or result.get("sink_signature_preset")
+    if sink_preset:
+        preset_note = (
+            f"Sink signature preset requested: <code>{_escape_html(sink_preset)}</code>. "
+            "This build records the request; preset integration is pending."
+        )
+    else:
+        preset_note = "Sink signature preset not requested; default sink registry is used."
 
     if gnn_weighted:
         vuln_desc = "The analysis (GNN-weighted) identified a security issue with a confidence score"
@@ -1471,9 +1488,9 @@ def _generate_badges_section(result: Dict[str, Any]) -> str:
             </ul>
             <p style="margin-top: 15px;">The <strong>method:line</strong> links show exactly where these sinks are called in your code.</p>
             
-            <h4 style="margin-top: 30px;">🔍 Using Graudit Sinks:</h4>
+            <h4 style="margin-top: 30px;">🔍 Sink Signature Presets:</h4>
             <div class="graudit-info">
-                <p>When <code>--sink-signature-preset graudit-java</code> is used, the analysis includes 40+ security-sensitive patterns from the Graudit security scanner, providing comprehensive coverage of potential vulnerabilities.</p>
+                <p>{preset_note}</p>
             </div>
         </div>
     </div>"""
