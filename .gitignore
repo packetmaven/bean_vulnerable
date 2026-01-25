@@ -90,6 +90,12 @@ temp*/
 cpg_slice.json
 evidence_spans.json
 
+# Allow documentation screenshots
+!examples/*.png
+!examples/*.jpg
+!examples/*.jpeg
+!examples/*.webp
+
 # Binary Files
 *.bin
 *.class

@@ -418,6 +418,38 @@ This section documents the **exact, implementation‑accurate workflow** for usi
    - If data reaches the sink without effective sanitization → **likely exploitable**.
    - If flow is indirect/uncertain or sanitization evidence is strong → **lower confidence / likely false positive**.
 
+**Report walkthrough (click to expand):**
+
+<details>
+<summary>Implicit Flow Details (control‑dependency taint)</summary>
+
+![Implicit Flow Details](examples/implicit_flow_details.png)
+</details>
+
+<details>
+<summary>Path‑Sensitive Details (branching + feasible paths)</summary>
+
+![Path‑Sensitive Details](examples/path_sensitive_details.png)
+</details>
+
+<details>
+<summary>Sink‑Specific Gating (evidence + decision)</summary>
+
+![Sink-Specific Gating](examples/sink_specific_gating.png)
+</details>
+
+<details>
+<summary>DFG Paths list (flow → graphs)</summary>
+
+![DFG Paths](examples/dfg_paths_list.png)
+</details>
+
+<details>
+<summary>Graph Index (method → CFG/DFG/PDG)</summary>
+
+![Graph Index (by method)](examples/graph_index_by_method.png)
+</details>
+
 **Sink‑Specific Gating (actual scoring math):**
 - Evidence items are weighted and averaged:
   - `base_confidence = Σ(weightᵢ × confidenceᵢ) / Σ(weightᵢ)`
@@ -968,6 +1000,25 @@ bean-vuln file.java \
   --summary
 ```
 
+**Next step (train a checkpoint):**
+
+Using more data and a larger batch makes CESCL more stable and usually improves representation quality, which can improve downstream results later. It will be slower, but it's the right direction for better training.
+
+If you want the exact command:
+
+```bash
+./venv_cli/bin/python analysis/train_spatial_gnn_pipeline.py \
+  --input tests/samples \
+  --data-dir training_data/samples \
+  --checkpoint-dir checkpoints/spatial_gnn \
+  --epochs 2 \
+  --batch-size 8 \
+  --limit 40 \
+  --device auto
+```
+
+If you want even better results, bump `--epochs` to 5 or remove `--limit` once it's stable.
+
 > **Note:** `--no-spatial-gnn` is deprecated/ignored in this repo; inference runs when dependencies are available.
 
 ### **Installation Requirements**
@@ -984,7 +1035,7 @@ pip install torch-scatter torch-sparse torch-cluster torch-spline-conv \
 pip install torch-geometric
 ```
 
-CodeBERT embeddings require HuggingFace transformers (torch 2.1-compatible):
+CodeBERT embeddings require HuggingFace transformers:
 
 ```bash
 pip install transformers==4.37.2
@@ -995,6 +1046,37 @@ The first run will download the `microsoft/codebert-base` model weights.
 CodeBERT embeddings are mandatory for GNN inference in this repo (no fallback embeddings are used). Ensure `transformers` is installed.
 
 For Apple Silicon (M1/M2/M3), CPU wheels are available via the PyG wheel index above. If a wheel is missing, fall back to source builds.
+
+### Apple Silicon PyG Fixes (libpyg.so)
+
+If PyG fails to load on Apple Silicon with errors like:
+- `libpyg.so` is `x86_64` (check with `file venv_cli/lib/python3.11/site-packages/libpyg.so`)
+- `OSError: Library not loaded: /Library/Frameworks/Python.framework/...`
+
+Use the venv-scoped stack and patch the Python framework path:
+
+```bash
+# Always use the venv python so you don't pick up /opt/homebrew site-packages
+./venv_cli/bin/python -c "import sys; print(sys.executable)"
+./venv_cli/bin/python -c "import torch_geometric; print(torch_geometric.__file__)"
+
+# Reinstall torch + PyG wheels that ship arm64-compatible libs
+./venv_cli/bin/python -m pip uninstall -y pyg-lib torch-scatter torch-sparse torch-cluster torch-spline-conv torch-geometric
+./venv_cli/bin/python -m pip install --force-reinstall --no-cache-dir "torch==2.3.0"
+./venv_cli/bin/python -m pip install --no-cache-dir pyg-lib torch-scatter torch-sparse torch-cluster torch-spline-conv \
+  -f https://data.pyg.org/whl/torch-2.3.0+cpu.html
+./venv_cli/bin/python -m pip install --no-cache-dir torch-geometric
+
+# If libpyg.so still points at /Library/Frameworks, patch it to Homebrew’s Python
+/usr/bin/install_name_tool -change \
+  "/Library/Frameworks/Python.framework/Versions/3.11/Python" \
+  "/opt/homebrew/opt/python@3.11/Frameworks/Python.framework/Versions/3.11/Python" \
+  venv_cli/lib/python3.11/site-packages/libpyg.so
+```
+
+If an editable install pulls `torch==2.1.0` via `dgl/torchdata`, re-run the torch 2.3.0 + PyG install above after `pip install -e .`.
+
+If `torch_geometric.__file__` resolves to `/opt/homebrew/lib/python3.11/site-packages`, your venv is using system site-packages (or you're running a global `bean-vuln`). Recreate the venv without `--system-site-packages`, or run `./venv_cli/bin/bean-vuln` explicitly.
 
 ## 🚨 Common Dependency Issues
 
