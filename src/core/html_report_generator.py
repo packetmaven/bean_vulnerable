@@ -16,6 +16,7 @@ Based on: OWASP Top 10 2024, CWE-20/502, Tai-e v0.4.0, FSE 2024, PLDI 2024
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 from datetime import datetime
+import html as html_lib
 import webbrowser
 import shutil
 
@@ -149,6 +150,8 @@ def generate_comprehensive_html_report(result: Dict[str, Any], report_dir: Path,
         
         {_generate_findings_section(result)}
 
+        {_generate_aeg_lite_section(result)}
+
         {_generate_sink_gating_section(result)}
         
         {_generate_file_links_section(result, report_dir)}
@@ -178,6 +181,18 @@ def generate_comprehensive_html_report(result: Dict[str, Any], report_dir: Path,
         pass
     
     return report_path
+
+
+def _escape_html(value: Any) -> str:
+    if value is None:
+        return ""
+    return html_lib.escape(str(value))
+
+
+def _render_code_block(code: Optional[str]) -> str:
+    if not code:
+        return "<em>No payload available.</em>"
+    return f"<pre class=\"aeg-code\"><code>{_escape_html(code)}</code></pre>"
 
 
 def _get_css_styles() -> str:
@@ -539,6 +554,50 @@ def _get_css_styles() -> str:
         
         .graph-preview img:hover {
             opacity: 0.8;
+        }
+
+        .aeg-summary {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            margin-top: 12px;
+        }
+
+        .aeg-badge {
+            background: #eef2ff;
+            border-radius: 12px;
+            padding: 4px 10px;
+            font-size: 12px;
+        }
+
+        .aeg-card {
+            background: #fafafa;
+            border: 1px solid #e1e1e1;
+            border-radius: 8px;
+            padding: 12px;
+            margin-top: 12px;
+        }
+
+        .aeg-meta {
+            color: #7f8c8d;
+            font-size: 12px;
+            margin-bottom: 8px;
+        }
+
+        .aeg-code {
+            background: #2c3e50;
+            color: #ecf0f1;
+            padding: 12px;
+            border-radius: 6px;
+            overflow-x: auto;
+            font-size: 12px;
+            line-height: 1.5;
+        }
+
+        details.aeg-details summary {
+            cursor: pointer;
+            font-weight: 600;
+            margin-bottom: 8px;
         }
         
         .graph-card-footer {
@@ -967,13 +1026,44 @@ def _generate_advanced_analysis_section(implicit_flows, context_sensitive, path_
     methods_analyzed = interprocedural.get('methods_analyzed', 0)
     methods_with_tainted = interprocedural.get('methods_with_tainted_params', 0)
     
-    implicit_label = "Heuristic" if implicit_count else "Disabled"
-    context_label = "Heuristic (k-CFA)" if contexts_tracked else "Disabled"
+    implicit_has_data = isinstance(implicit_flows, dict) and (
+        "count" in implicit_flows or "variables" in implicit_flows
+    )
+    context_has_data = isinstance(context_sensitive, dict) and (
+        "contexts_tracked" in context_sensitive or "k_cfa_limit" in context_sensitive
+    )
+    path_has_data = isinstance(path_sensitive, dict) and any(
+        key in path_sensitive for key in ("branching_points", "feasible_paths", "infeasible_paths")
+    )
+    native_has_data = isinstance(native_code, dict) and any(
+        key in native_code for key in ("jni_methods", "taint_transfers")
+    )
+    inter_has_data = isinstance(interprocedural, dict) and (
+        "methods_analyzed" in interprocedural or "methods_with_tainted_params" in interprocedural
+    )
+
+    implicit_enabled = implicit_flows.get("enabled") if isinstance(implicit_flows, dict) else None
+    if implicit_enabled is None:
+        implicit_enabled = implicit_has_data
+    implicit_label = "Disabled" if not implicit_enabled else (
+        "Heuristic" if implicit_count else "Enabled (0)"
+    )
+    context_label = "Heuristic (k-CFA)" if contexts_tracked else ("Enabled (k-CFA)" if context_has_data else "Disabled")
     if object_sensitive_enabled:
         context_label = f"{context_label} + Tai-e"
-    path_label = "Experimental" if (branching_points or feasible_paths or infeasible_paths) else "Disabled"
-    native_label = "Experimental" if (native_methods or native_transfers) else "Disabled"
-    inter_label = "Heuristic" if methods_analyzed else "Disabled"
+    path_enabled = path_sensitive.get("enabled") if isinstance(path_sensitive, dict) else None
+    if path_enabled is None:
+        path_enabled = path_has_data
+    path_label = "Disabled" if not path_enabled else (
+        "Experimental" if (branching_points or feasible_paths or infeasible_paths) else "Enabled (0)"
+    )
+    native_enabled = native_code.get("enabled") if isinstance(native_code, dict) else None
+    if native_enabled is None:
+        native_enabled = native_has_data
+    native_label = "Disabled" if not native_enabled else (
+        "Experimental" if (native_methods or native_transfers) else "Enabled (0)"
+    )
+    inter_label = "Heuristic" if methods_analyzed else ("Enabled (0)" if inter_has_data else "Disabled")
 
     tai_e_meta = tai_e_meta if isinstance(tai_e_meta, dict) else {}
     tai_e_enabled = bool(tai_e_meta.get("enabled"))
@@ -1395,10 +1485,35 @@ def _generate_findings_section(result: Dict[str, Any]) -> str:
     vuln_class = "vulnerable" if result.get('vulnerability_detected') else "safe"
     confidence = result.get('confidence', 0.0)
     vuln_type = result.get('vulnerability_type', 'None')
+    vuln_list = result.get('vulnerabilities_found', []) or []
+    if not isinstance(vuln_list, list):
+        vuln_list = []
+    detected_badges = ""
+    if vuln_list:
+        badge_items = "".join(
+            f"<span class=\"badge badge-info\" style=\"margin-right: 6px;\">{_escape_html(v)}</span>"
+            for v in vuln_list
+        )
+        detected_badges = f"""
+        <div style="margin-top: 16px;">
+            <div class="metric-label">All detected types</div>
+            <div>{badge_items}</div>
+        </div>
+        """
+
+    joern_dataflow = result.get("joern_dataflow") or result.get("taint_tracking", {}).get("joern_dataflow")
+    flows_by_sink = joern_dataflow.get("flows_by_sink", {}) if isinstance(joern_dataflow, dict) else {}
+    total_flows = 0
+    if isinstance(flows_by_sink, dict):
+        for payload in flows_by_sink.values():
+            if isinstance(payload, dict):
+                total_flows += int(payload.get("flows", 0) or 0)
+    joern_flow_display = str(total_flows) if flows_by_sink else "n/a"
+    joern_flow_note = "reachableByFlows total" if flows_by_sink else "enable --joern-dataflow"
     
     return f"""<div class="section">
         <h3 style="color: #2c3e50; font-size: 20px; margin-bottom: 15px;">📊 Findings</h3>
-        <div class="metrics-grid" style="grid-template-columns: repeat(3, 1fr);">
+        <div class="metrics-grid" style="grid-template-columns: repeat(4, 1fr);">
             <div class="metric-card">
                 <div class="metric-label">Vulnerability Status</div>
                 <div class="metric-value" style="color: {'#e74c3c' if vuln_class == 'vulnerable' else '#27ae60'};">{vuln_status}</div>
@@ -1411,7 +1526,186 @@ def _generate_findings_section(result: Dict[str, Any]) -> str:
                 <div class="metric-label">Vulnerability Type</div>
                 <div class="metric-value" style="font-size: 18px;">{vuln_type}</div>
             </div>
+            <div class="metric-card">
+                <div class="metric-label">Joern Flows</div>
+                <div class="metric-value">{joern_flow_display}</div>
+                <div class="metric-description">{joern_flow_note}</div>
+            </div>
         </div>
+        {detected_badges}
+    </div>"""
+
+
+def _generate_aeg_lite_section(result: Dict[str, Any]) -> str:
+    """Render AEG-Lite Java PoC/Patch payloads when available."""
+    aeg = result.get("aeg_lite_java")
+    if not isinstance(aeg, dict):
+        return ""
+
+    if not aeg.get("success", False):
+        error_text = _escape_html(aeg.get("error", "AEG-Lite Java analysis failed."))
+        return f"""<div class="section">
+        <h3 style="color: #2c3e50; font-size: 20px; margin-bottom: 15px;">🧪 AEG-Lite Java (PoCs & Patches)</h3>
+        <div class="aeg-card">
+            <div class="aeg-meta">Status: failed</div>
+            <p style="color: #c0392b;">{error_text}</p>
+        </div>
+    </div>"""
+
+    report = aeg.get("report", {})
+    if not isinstance(report, dict):
+        return ""
+
+    classes_analyzed = report.get("classes_analyzed", 0)
+    vuln_count = report.get("vulnerability_count", len(report.get("vulnerabilities", []) or []))
+    poc_count = report.get("poc_count", 0)
+    patch_count = report.get("patch_count", 0)
+    analysis_method = _escape_html(aeg.get("analysis_method", "asm_bytecode"))
+
+    pocs = report.get("pocs") or []
+    patches = report.get("patches") or []
+
+    poc_blocks = ""
+    if pocs:
+        for poc in pocs:
+            poc_id = _escape_html(poc.get("id", "unknown"))
+            vuln_id = _escape_html(poc.get("vulnerability_id", ""))
+            poc_type = _escape_html(poc.get("type", "unknown"))
+            status = _escape_html(poc.get("status", "UNKNOWN"))
+            layer1 = poc.get("layer1")
+            layer2 = poc.get("layer2")
+            layer3 = poc.get("layer3")
+            code = poc.get("code") or poc.get("poc_code") or poc.get("code_preview")
+            layer_meta = f"layers: {layer1}/{layer2}/{layer3}" if layer1 is not None else ""
+            poc_blocks += f"""
+            <details class="aeg-details aeg-card">
+                <summary>PoC <code>{poc_id}</code> — {poc_type} ({status})</summary>
+                <div class="aeg-meta">{layer_meta} {f"· vuln {vuln_id}" if vuln_id else ""}</div>
+                {_render_code_block(code)}
+            </details>
+            """
+    else:
+        poc_blocks = "<div class=\"aeg-card\"><em>No PoC payloads available.</em></div>"
+
+    patch_blocks = ""
+    if patches:
+        for patch in patches:
+            vuln_id = _escape_html(patch.get("vulnerability_id", "unknown"))
+            patch_type = _escape_html(patch.get("type", "unknown"))
+            template_id = _escape_html(patch.get("template_id", ""))
+            status = _escape_html(patch.get("status", "UNKNOWN"))
+            layer1 = patch.get("layer1")
+            layer2 = patch.get("layer2")
+            layer3 = patch.get("layer3")
+            vulnerable_code = patch.get("vulnerable_code") or patch.get("vulnerable_preview")
+            patched_code = patch.get("patched_code") or patch.get("patched_preview")
+            layer_meta = f"layers: {layer1}/{layer2}/{layer3}" if layer1 is not None else ""
+            patch_blocks += f"""
+            <details class="aeg-details aeg-card">
+                <summary>Patch <code>{vuln_id}</code> — {patch_type} ({status})</summary>
+                <div class="aeg-meta">{layer_meta} {f"· template {template_id}" if template_id else ""}</div>
+                <div style="margin-bottom: 10px;"><strong>Vulnerable code</strong></div>
+                {_render_code_block(vulnerable_code)}
+                <div style="margin-top: 10px; margin-bottom: 10px;"><strong>Patched code</strong></div>
+                {_render_code_block(patched_code)}
+            </details>
+            """
+    else:
+        patch_blocks = "<div class=\"aeg-card\"><em>No patch payloads available.</em></div>"
+
+    enhanced = report.get("enhanced", {})
+    enhanced_section = ""
+    if isinstance(enhanced, dict) and (
+        enhanced.get("patches") or enhanced.get("ensemble") or enhanced.get("method_counts")
+    ):
+        enhanced_patches = enhanced.get("patches") or []
+        enhanced_ensemble = enhanced.get("ensemble") or []
+        method_counts = enhanced.get("method_counts") or {}
+        enhanced_patch_count = enhanced.get("patch_count", len(enhanced_patches))
+        enhanced_patch_success = enhanced.get("patch_success_count", 0)
+
+        method_badges = ""
+        if isinstance(method_counts, dict):
+            for method, count in method_counts.items():
+                method_badges += f"<span class=\"aeg-badge\">{_escape_html(str(method))}: {count}</span>"
+
+        enhanced_patch_blocks = ""
+        if enhanced_patches:
+            for patch in enhanced_patches:
+                cwe = _escape_html(patch.get("cwe", "unknown"))
+                patch_type = _escape_html(patch.get("type", "unknown"))
+                status = "PASS" if patch.get("success", False) else "FAIL"
+                line = patch.get("line")
+                message = _escape_html(patch.get("message", ""))
+                patched_code = patch.get("patched_code")
+                meta = []
+                if line:
+                    meta.append(f"line {line}")
+                if message:
+                    meta.append(message)
+                meta_text = " · ".join(meta)
+                enhanced_patch_blocks += f"""
+                <details class="aeg-details aeg-card">
+                    <summary>Enhanced Patch <code>{cwe}</code> — {patch_type} ({status})</summary>
+                    <div class="aeg-meta">{meta_text}</div>
+                    <div style="margin-top: 10px; margin-bottom: 10px;"><strong>Patched code</strong></div>
+                    {_render_code_block(patched_code)}
+                </details>
+                """
+        else:
+            enhanced_patch_blocks = "<div class=\"aeg-card\"><em>No enhanced patches available.</em></div>"
+
+        enhanced_findings = ""
+        if enhanced_ensemble:
+            rows = []
+            for finding in enhanced_ensemble:
+                cwe = _escape_html(finding.get("cwe", ""))
+                ftype = _escape_html(finding.get("type", ""))
+                confidence = finding.get("confidence")
+                confidence_text = f"{confidence:.2f}" if isinstance(confidence, (int, float)) else "n/a"
+                evidence = _escape_html(finding.get("evidence", ""))
+                rows.append(f"<li><strong>{cwe}</strong> {ftype} — {confidence_text} · {evidence}</li>")
+            enhanced_findings = "<ul>" + "\n".join(rows) + "</ul>"
+        else:
+            enhanced_findings = "<em>No enhanced findings available.</em>"
+
+        enhanced_section = f"""
+        <div style="margin-top: 24px;">
+            <h4 style="margin-bottom: 8px;">Enhanced Source Scan (AST + Semantic + Taint)</h4>
+            <div class="aeg-summary">
+                {method_badges}
+                <span class="aeg-badge">enhanced patches: {enhanced_patch_count}</span>
+                <span class="aeg-badge">enhanced patch success: {enhanced_patch_success}</span>
+            </div>
+            <div style="margin-top: 12px;">
+                <h5 style="margin-bottom: 6px;">Enhanced findings</h5>
+                {enhanced_findings}
+            </div>
+            <div style="margin-top: 16px;">
+                <h5 style="margin-bottom: 6px;">Enhanced patches</h5>
+                {enhanced_patch_blocks}
+            </div>
+        </div>
+        """
+
+    return f"""<div class="section">
+        <h3 style="color: #2c3e50; font-size: 20px; margin-bottom: 15px;">🧪 AEG-Lite Java (PoCs & Patches)</h3>
+        <div class="aeg-summary">
+            <span class="aeg-badge">method: {analysis_method}</span>
+            <span class="aeg-badge">classes: {classes_analyzed}</span>
+            <span class="aeg-badge">vulns: {vuln_count}</span>
+            <span class="aeg-badge">pocs: {poc_count}</span>
+            <span class="aeg-badge">patches: {patch_count}</span>
+        </div>
+        <div style="margin-top: 16px;">
+            <h4 style="margin-bottom: 8px;">PoC payloads</h4>
+            {poc_blocks}
+        </div>
+        <div style="margin-top: 20px;">
+            <h4 style="margin-bottom: 8px;">Patch payloads</h4>
+            {patch_blocks}
+        </div>
+        {enhanced_section}
     </div>"""
 
 

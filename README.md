@@ -20,6 +20,7 @@ A vulnerability analysis framework with experimental GNN modules; heuristic scor
 - [📊 Automatic Graph Generation](#-automatic-graph-generation)
 - [🚀 Enhanced CLI with Hybrid Dynamic Testing](#-enhanced-cli-with-hybrid-dynamic-testing)
 - [🔧 Command Reference](#-command-reference-all-tested--working)
+- [✅ Production-Ready Enhancements (New)](#-production-ready-enhancements-new)
 - [🧠 Spatial GNN Module (Experimental)](#-spatial-gnn-module-experimental)
 - [🚨 Common Dependency Issues](#-common-dependency-issues)
 - [📦 Framework Installation](#-framework-installation)
@@ -77,11 +78,15 @@ bean-vuln tests/samples/VUL001_SQLInjection_Basic.java --html-report output --su
 # If the console script is not on PATH, use the repo wrappers:
 ./bean-vuln tests/samples/VUL001_SQLInjection_Basic.java --html-report output --summary
 ./bean-vuln2 tests/samples/VUL001_SQLInjection_Basic.java --comprehensive --html-report output --summary
+# Repo wrappers auto-use venv_cli if it exists.
+
+# Optional: install global CLI wrappers into ~/.local/bin
+./scripts/install_cli.sh
 ```
 
 ### 🎯 **Two CLI Options**
 
-Bean Vulnerable provides two command-line tools (also available as repo wrappers `./bean-vuln` and `./bean-vuln2`):
+Bean Vulnerable provides two command-line tools (also available as repo wrappers `./bean-vuln`, `./bean_vuln`, `./bean-vuln2`, and `./bean_vuln2`):
 
 | Command | Purpose | Speed | Use Case |
 |---------|---------|-------|----------|
@@ -94,6 +99,42 @@ bean-vuln file.java --summary
 
 # Comprehensive analysis (Enhanced CLI)
 bean-vuln2 file.java --comprehensive --html-report output --summary
+```
+
+### ✅ **How / Why / When to use the CLI**
+
+**How**
+- Use `bean-vuln` for fast feedback during development or CI.
+- Use `bean-vuln2 --comprehensive` for deep audits with advanced taint metrics.
+- Use `--html-report` to generate graphs + Joern reachableByFlows metrics automatically.
+- Inputs must be Java-only (`.java` files or directories containing `.java`). The Python wrappers are orchestration only.
+
+**Why**
+- `bean-vuln`: fast heuristic + taint tracking for quick triage and iterative fixes.
+- `bean-vuln2`: deeper analysis, richer evidence, and advanced taint fields (implicit/path/JNI).
+
+**When**
+- `bean-vuln`: local dev, pre-commit checks, CI/CD.
+- `bean-vuln2`: production audits, research-grade analysis, regression validation.
+
+### 🧭 **Decision Tree (pick the right CLI)**
+
+- Need fast feedback for a Java file? → `bean-vuln file.java --summary`
+- Need deep analysis + advanced taint metrics? → `bean-vuln2 file.java --comprehensive`
+- Need graphs + Joern reachableByFlows in HTML? → add `--html-report output`
+- Need PoCs/Patches from AEG-Lite? → add `--aeg-lite-java --aeg-lite-pocs --aeg-lite-patches`
+
+### ⚡ **Quickstart (minimal copy/paste)**
+
+```bash
+# 1) Fast scan + HTML report (graphs + Joern flows)
+bean-vuln tests/samples/VUL001_SQLInjection_Basic.java --html-report output --summary
+
+# 2) Deep audit with advanced taint metrics
+bean-vuln2 tests/samples/VUL001_SQLInjection_Basic.java --comprehensive --html-report output --summary
+
+# 3) PoC + patch payloads (AEG-Lite Java)
+bean-vuln tests/samples/VUL006_XSS_ServletResponse.java --aeg-lite-java --aeg-lite-pocs --aeg-lite-patches --html-report output
 ```
 
 **Expected Output:**
@@ -176,6 +217,27 @@ Research-backed techniques from top-tier conferences (ACM 2024, Tai-e v0.5.1, FS
 - **3/5 Interprocedural**: 3 out of 5 methods contain interprocedural taint propagation
 - **0 Path-Sensitive**: No branch-dependent taint flows detected
 - **0 Native (JNI)**: No taint transfers through native method boundaries
+
+**Enabling Path-Sensitive + Native (JNI) metrics**
+
+These counters are part of **Comprehensive Taint Tracking** and are **enabled by default** in both `bean-vuln` and `bean-vuln2`. You can explicitly control them with CLI flags:
+
+- `--implicit-flows` / `--no-implicit-flows`
+- `--path-sensitive` / `--no-path-sensitive`
+- `--native-jni` / `--no-native-jni`
+
+To surface the numbers, generate an HTML report or JSON output:
+
+```bash
+# Path-sensitive sample (expects non-zero branches/feasible paths)
+bean-vuln tests/samples/VUL_PathSensitive.java --path-sensitive --html-report output
+
+# Native (JNI) sample (expects non-zero JNI methods/transfers)
+bean-vuln tests/samples/VUL_NativeCode.java --native-jni --html-report output
+
+# Implicit flow sample (expects non-zero control dependencies)
+bean-vuln tests/samples/VUL015_SessionFixation.java --implicit-flows --html-report output
+```
 
 ---
 
@@ -281,7 +343,12 @@ If `bean-vuln` command isn't found after installation:
 pip install -e . --force-reinstall --no-deps
 
 # Or use module form
-python -m bean_vuln_cli [args]
+python -m core.bean_vuln_cli [args]
+python -m core.bean_vuln_cli_enhanced [args]
+
+# Or use repo wrappers without execute bit
+python3 ./bean-vuln [args]
+python3 ./bean-vuln2 [args]
 ```
 
 ## 📊 **Automatic Graph Generation **
@@ -434,6 +501,88 @@ bean-vuln file.java --html-report output --explain
 # Comprehensive scan (ensemble + advanced-features + spatial GNN + explain)
 bean-vuln file.java --html-report output --comprehensive
 ```
+
+### **AEG-Lite Java Analyzer (Experimental)**
+AEG-Lite is a **Java-only** analyzer. The Python CLI wrappers are optional orchestration,
+but the **ingress file must be `.java`** (or a directory containing `.java` files).
+The runner compiles the target `.java` internally and emits a JSON report with classes,
+findings, PoCs, and patches.
+
+Optional PoC/patch synthesis uses templates (no JPF/Z3 required by default). JPF/Z3
+remain available under the `jpf-z3` profile for deeper symbolic runs.
+
+```bash
+# 1) Build the Java helper (creates a shaded jar)
+cd java/aeg-lite
+mvn -q -DskipTests package
+
+# (Optional) Include JPF/Z3 sources (requires local artifacts)
+mvn -q -DskipTests -Pjpf-z3 package
+
+# 2) Run AEG-Lite Java analysis (single-file input)
+java -cp target/aeg-lite-java-0.1.0-all.jar \
+  com.beanvulnerable.aeg.AegLiteRunner \
+  --source path/to/file.java
+
+# (Optional) Use the Python CLI wrapper (still Java-only input)
+bean-vuln path/to/file.java --aeg-lite-java --summary
+
+# (Optional) Generate PoCs/Patches (template-based)
+java -cp target/aeg-lite-java-0.1.0-all.jar \
+  com.beanvulnerable.aeg.AegLiteRunner \
+  --source path/to/file.java \
+  --generate-pocs --generate-patches
+
+# (Optional) Add extra classpath for compile-time deps
+java -cp target/aeg-lite-java-0.1.0-all.jar \
+  com.beanvulnerable.aeg.AegLiteRunner \
+  --source path/to/file.java \
+  --classpath "/path/to/libs/*"
+
+# (Optional) Extra classpath via wrapper
+AEG_LITE_CLASSPATH="/path/to/libs/*" \
+  bean-vuln path/to/file.java --aeg-lite-java --summary
+```
+
+Notes:
+- JPF/Z3 dependencies live under the `jpf-z3` Maven profile. Enable with `-Pjpf-z3`
+  after installing those artifacts locally (JPF is not published to Maven Central).
+- The current output is a **bytecode metrics** report (instructions, invocations,
+  branches) used to seed future symbolic execution.
+- If you pass `--joern-dataflow` and set `JOERN_BIN` (or `JOERN_HOME`), the AEG runner
+  will attempt to run `comprehensive_graphs.sc` and report generated graph counts.
+- When `--html-report` is used, `--joern-dataflow` is enabled automatically to surface
+  reachableByFlows metrics in the report.
+
+## ✅ **Production-Ready Enhancements (New)**
+
+### **Enhanced Java Source Scanner (ClassVulnerabilityScanner)**
+- **What:** Multi-method Java source scanner (pattern + AST + semantic + taint) built into AEG-Lite.
+- **Why:** Higher recall with confidence-calibrated findings, plus quick source-level evidence.
+- **How:** Use the enhanced scan flags on Java source input.
+- **When:** Use for fast source-level validation or to augment bytecode heuristics.
+- **Example (CLI):** `java -cp java/aeg-lite/target/aeg-lite-java-0.1.0-all.jar com.beanvulnerable.aeg.AegLiteRunner --source tests/samples/VUL001_SQLInjection_Basic.java --enhanced-scan`
+
+### **Enhanced Patch Synthesis (EnhancedPatchSynthesizer + Template Repository)**
+- **What:** Template-based patch generation covering common CWE classes.
+- **Why:** Produces safer, structured fix guidance alongside analysis results.
+- **How:** Enable enhanced patching (implies enhanced scan).
+- **When:** Use when you want automated patch suggestions for Java source files.
+- **Example (CLI):** `java -cp java/aeg-lite/target/aeg-lite-java-0.1.0-all.jar com.beanvulnerable.aeg.AegLiteRunner --source tests/samples/VUL003_CommandInjection_Runtime.java --enhanced-patches`
+
+### **Reference Implementation Demo**
+- **What:** Runnable demo that prints detection, patching, ensemble, and exploitability outputs.
+- **Why:** Quick sanity check and demo script for onboarding or demos.
+- **How:** Compile/run the Java file or scan it with the CLI.
+- **When:** Use for presentations, walkthroughs, or regression sanity checks.
+- **Example (CLI):** `bean_vuln analysis/BeanVulnerableReferenceImplementation.java --summary`
+
+### **Comprehensive Test Suite**
+- **What:** CLI-backed regression suite for vulnerability detection + patch generation.
+- **Why:** Ensures detection and patching remain stable after changes.
+- **How:** Compile and run the suite (uses the CLI internally).
+- **When:** Run after updates to detection, AEG-Lite templates, or heuristics.
+- **Example (CLI):** `java -cp java/aeg-lite/target/aeg-lite-java-0.1.0-all.jar com.beanvulnerable.aeg.AegLiteRunner --source tests/samples/VUL005_PathTraversal_FileRead.java --enhanced-scan`
 
 ### **Graph Generation (Optional Manual Control)**
 ```bash

@@ -1,0 +1,78 @@
+name: Bean-Vulnerable AEG Analysis
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Java
+        uses: actions/setup-java@v3
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+
+      - name: Install Z3
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y z3 libz3-dev
+
+      - name: Build AEG module
+        run: mvn -f java/aeg-lite/pom.xml -DskipTests install
+
+      - name: Build Maven plugin
+        run: mvn -f java/bean-vulnerable-maven-plugin/pom.xml -DskipTests install
+
+      - name: Run Bean-Vulnerable AEG Analysis
+        run: mvn -f java/aeg-lite/pom.xml com.beanvulnerable:bean-vulnerable-maven-plugin:1.0.0:analyze-aeg
+        continue-on-error: true
+
+      - name: Generate reports
+        if: always()
+        run: |
+          mkdir -p reports
+          cp target/bean-reports/* reports/ || true
+
+      - name: Upload analysis artifacts
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: vulnerability-reports
+          path: reports/
+
+      - name: Comment on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            const reportPath = 'target/bean-reports/summary.json';
+            if (!fs.existsSync(reportPath)) {
+              return;
+            }
+            const report = fs.readFileSync(reportPath, 'utf8');
+            const data = JSON.parse(report);
+
+            const repo = `${context.repo.owner}/${context.repo.repo}`;
+            const comment = `## Bean-Vulnerable AEG Analysis Results
+
+            - **Vulnerabilities Found:** ${data.totalVulnerabilities}
+            - **PoCs Generated:** ${data.pocCount}
+            - **Patches Generated:** ${data.patchCount}
+
+            [View Full Report](https://github.com/${repo}/actions/runs/${context.runId})
+            `;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });

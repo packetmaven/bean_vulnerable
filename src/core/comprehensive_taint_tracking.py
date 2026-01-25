@@ -312,11 +312,21 @@ class ComprehensiveTaintTracker:
         'getCanonicalPath', 'getCanonicalFile', 'toRealPath', 'normalize'
     }
     
-    def __init__(self, alias_analyzer: Optional[EnhancedAliasAnalyzer] = None, tai_e_config: Optional["TaiEConfig"] = None):
+    def __init__(
+        self,
+        alias_analyzer: Optional[EnhancedAliasAnalyzer] = None,
+        tai_e_config: Optional["TaiEConfig"] = None,
+        enable_implicit_flows: bool = True,
+        enable_path_sensitive: bool = True,
+        enable_native_jni: bool = True,
+    ):
         self.logger = logging.getLogger(__name__)
         self.alias_analyzer = alias_analyzer or EnhancedAliasAnalyzer()
         self.tai_e_config = tai_e_config
         self.tai_e_result: Optional["TaiEResult"] = None
+        self.enable_implicit_flows = enable_implicit_flows
+        self.enable_path_sensitive = enable_path_sensitive
+        self.enable_native_jni = enable_native_jni
         self.tainted_variables: Set[str] = set()
         self.sanitized_variables: Set[str] = set()
         self.taint_flows: List[Dict[str, Any]] = []
@@ -363,10 +373,13 @@ class ComprehensiveTaintTracker:
         self._perform_alias_refinement()
         
         # Phase 6: Advanced Taint Tracking (ACM 2024, FSE 2024, PLDI 2024)
-        self._track_implicit_flows(lines)
+        if self.enable_implicit_flows:
+            self._track_implicit_flows(lines)
         self._track_context_sensitive(lines)
-        self._track_path_sensitive(lines)
-        self._track_native_code(lines)
+        if self.enable_path_sensitive:
+            self._track_path_sensitive(lines)
+        if self.enable_native_jni:
+            self._track_native_code(lines)
         self._track_interprocedural(lines)
         self._detect_sanitizers_advanced(lines)
         self._detect_template_engines(lines)
@@ -1039,6 +1052,7 @@ class ComprehensiveTaintTracker:
             
             # Advanced Taint Tracking (ACM 2024, FSE 2024, PLDI 2024)
             'implicit_flows': {
+                'enabled': self.enable_implicit_flows,
                 'count': implicit_flows_count,
                 'variables': implicit_flows_dict
             },
@@ -1048,6 +1062,7 @@ class ComprehensiveTaintTracker:
                 'method_contexts': {k: list(v) for k, v in self.context_sensitive_data.items()}
             },
             'path_sensitive_analysis': {
+                'enabled': self.enable_path_sensitive,
                 'branching_points': branching_points,
                 'feasible_paths': feasible_paths,
                 'infeasible_paths': infeasible_paths,
@@ -1056,6 +1071,7 @@ class ComprehensiveTaintTracker:
                 'infeasible_details': self.path_sensitive_data['infeasible_paths']
             },
             'native_code_analysis': {
+                'enabled': self.enable_native_jni,
                 'jni_methods': jni_methods_count,
                 'taint_transfers': taint_transfers_count,
                 'jni_method_details': self.native_code_data['jni_methods'],

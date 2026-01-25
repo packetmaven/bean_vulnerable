@@ -6,7 +6,7 @@ public class VUL003_CommandInjection_Runtime {
         Runtime.getRuntime().exec(command);
     }
     
-    public void vulnerableSystemCall(String filename) throws IOException {
+    public void vulnerableSystemCall(String filename) throws IOException, InterruptedException {
         Process proc = Runtime.getRuntime().exec("cat " + filename);
         proc.waitFor();
     }
