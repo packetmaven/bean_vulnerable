@@ -1294,8 +1294,8 @@ def main():
         if not getattr(fw, "spatial_gnn_model", None):
             LOG.error("❌ --require-gnn set, but Spatial GNN is not initialized. Install torch + torch-geometric and retry.")
             sys.exit(2)
-        if not getattr(fw, "gnn_weights_loaded", False):
-            LOG.error("❌ --require-gnn set, but no GNN checkpoint is loaded. Provide --gnn-checkpoint.")
+        if args.gnn_checkpoint and not getattr(fw, "gnn_weights_loaded", False):
+            LOG.error("❌ --require-gnn set, but no GNN checkpoint is loaded. Verify --gnn-checkpoint points to a valid file.")
             sys.exit(2)
     
     # Display configuration

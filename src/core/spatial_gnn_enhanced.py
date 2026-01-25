@@ -73,6 +73,40 @@ except ImportError:
     AutoModel = None
     logger.error(" Transformers not available - install transformers to enable CodeBERT")
 
+# Optional safetensors support for secure model loading
+try:
+    import safetensors  # noqa: F401
+    SAFETENSORS_AVAILABLE = True
+except ImportError:
+    SAFETENSORS_AVAILABLE = False
+
+
+def _parse_version_tuple(version: str) -> Tuple[int, int, int]:
+    if not version:
+        return 0, 0, 0
+    core = version.split("+", 1)[0]
+    parts = core.split(".")
+    major = int(parts[0]) if len(parts) > 0 and parts[0].isdigit() else 0
+    minor = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
+    patch = 0
+    if len(parts) > 2:
+        patch_digits = []
+        for ch in parts[2]:
+            if ch.isdigit():
+                patch_digits.append(ch)
+            else:
+                break
+        patch = int("".join(patch_digits)) if patch_digits else 0
+    return major, minor, patch
+
+
+def _torch_version_at_least(major: int, minor: int, patch: int = 0) -> bool:
+    try:
+        current = _parse_version_tuple(getattr(torch, "__version__", ""))
+        return current >= (major, minor, patch)
+    except Exception:
+        return False
+
 # 
 # 1. Enhanced Graph Representation Types and Configuration
 # 
@@ -564,25 +598,42 @@ class AdaptiveTransformerGNNFusion(nn.Module):
         self.hidden_dim = hidden_dim
         self.num_attention_heads = num_attention_heads
         self.use_codebert = use_codebert
+        self.codebert_tokenizer = None
+        self.codebert_model = None
+        self.codebert_projection = nn.Linear(hidden_dim, hidden_dim)
         
         # CodeBERT integration for semantic embeddings
         if use_codebert:
             if not TRANSFORMERS_AVAILABLE:
-                raise RuntimeError(
-                    "Transformers not available. Install with `pip install transformers` "
-                    "to enable CodeBERT embeddings."
-                )
-            try:
-                self.codebert_tokenizer = AutoTokenizer.from_pretrained("microsoft/codebert-base")
-                self.codebert_model = AutoModel.from_pretrained("microsoft/codebert-base")
-                self.codebert_projection = nn.Linear(768, hidden_dim)  # CodeBERT hidden size is 768
-                logger.info(" CodeBERT model loaded successfully")
-            except Exception as e:
-                raise RuntimeError(f"CodeBERT loading failed: {e}") from e
-        else:
-            self.codebert_tokenizer = None
-            self.codebert_model = None
-            self.codebert_projection = nn.Linear(hidden_dim, hidden_dim)
+                logger.warning(" Transformers unavailable; disabling CodeBERT embeddings.")
+                self.use_codebert = False
+            else:
+                model_name = "microsoft/codebert-base"
+                try:
+                    self.codebert_tokenizer = AutoTokenizer.from_pretrained(model_name)
+                    model = None
+                    if SAFETENSORS_AVAILABLE:
+                        try:
+                            model = AutoModel.from_pretrained(model_name, use_safetensors=True)
+                        except Exception as exc:
+                            logger.warning(f" CodeBERT safetensors load failed: {exc}")
+                    if model is None:
+                        if _torch_version_at_least(2, 6, 0):
+                            model = AutoModel.from_pretrained(model_name)
+                        else:
+                            raise RuntimeError(
+                                "Torch < 2.6 blocks torch.load for CodeBERT. "
+                                "Install `safetensors` or upgrade torch >= 2.6."
+                            )
+                    self.codebert_model = model
+                    self.codebert_projection = nn.Linear(768, hidden_dim)  # CodeBERT hidden size is 768
+                    logger.info(" CodeBERT model loaded successfully")
+                except Exception as exc:
+                    self.use_codebert = False
+                    self.codebert_tokenizer = None
+                    self.codebert_model = None
+                    self.codebert_projection = nn.Linear(hidden_dim, hidden_dim)
+                    logger.warning(f" CodeBERT disabled: {exc}")
         
         # Transformer layers for global attention
         self.transformer_layers = nn.ModuleList([
@@ -642,7 +693,8 @@ class AdaptiveTransformerGNNFusion(nn.Module):
         if not node_tokens:
             return torch.zeros((0, self.hidden_dim))
         if self.codebert_model is None or self.codebert_tokenizer is None:
-            raise RuntimeError("CodeBERT is not initialized; enable transformers to use embeddings.")
+            logger.warning(" CodeBERT not initialized; returning zero embeddings.")
+            return torch.zeros((len(node_tokens), self.hidden_dim))
         
         try:
             # Tokenize and encode with CodeBERT
@@ -1489,7 +1541,8 @@ def create_nextgen_spatial_gnn_model(config: Optional[Dict[str, Any]] = None) ->
                 setattr(gnn_config, key, value)
     
     if gnn_config.use_codebert and not TRANSFORMERS_AVAILABLE:
-        raise RuntimeError("Transformers required for CodeBERT embeddings. Install `transformers` first.")
+        logger.warning(" Transformers not available; disabling CodeBERT embeddings.")
+        gnn_config.use_codebert = False
 
     # Create model
     model = NextGenSpatialGNNVulnerabilityDetector(gnn_config)
