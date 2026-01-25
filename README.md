@@ -29,6 +29,7 @@ A vulnerability analysis framework with experimental GNN modules; heuristic scor
   - [Alias Analysis Results](#alias-analysis-results)
   - [Advanced Taint Analysis](#advanced-taint-analysis)
   - [Tainted Control Flow Analysis](#tainted-control-flow-analysis)
+  - [Taint + Graph Guided Vulnerability Discovery (Methodology)](#taint--graph-guided-vulnerability-discovery-methodology)
   - [Control Flow Graph (CFG) Visualization](#control-flow-graph-cfg-visualization)
 - [📊 Automatic Graph Generation](#-automatic-graph-generation)
 - [🚀 Enhanced CLI with Hybrid Dynamic Testing](#-enhanced-cli-with-hybrid-dynamic-testing)
@@ -401,6 +402,8 @@ This section documents the **exact, implementation‑accurate workflow** for usi
 - **DFG (Data Flow Graph)**: data dependencies + AST/CFG overlays. Use this to track *data propagation* from sources to sinks.
 - **CFG (Control Flow Graph)**: execution order. Use this to validate *control dependencies* and branch feasibility context.
 - **PDG (Program Dependence Graph)**: combined control + data dependencies. Use this as the most complete cross‑check.
+
+Use the report sections below in this order to validate a finding end-to-end.
 
 **Report sections to use (in order):**
 1. **Findings**: start with the highest-confidence sinks and evidence tags.
@@ -890,6 +893,7 @@ bean-vuln2 tests/samples/VUL022_IntegerOverflow.java \
 - **More precise call targets** improves interprocedural taint accuracy on virtual calls and framework APIs.
 - **Better context tracking** clarifies which path/method instance actually propagates taint.
 - **Higher-confidence triage** when combined with DFG/PDG graphs and sink gating evidence.
+Use Tai-e when codebases are heavy on polymorphism, collections, or framework abstractions that would otherwise over-taint.
 ```bash
 # 1) Build Tai-e and set TAI_E_HOME
 ./scripts/setup_tai_e.sh
