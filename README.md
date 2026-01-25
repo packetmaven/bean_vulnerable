@@ -1038,6 +1038,11 @@ pip install -e .
   "confidence": 0.84,
   "cpg": { "nodes": 177, "edges": 725, "methods": 10, "calls": 16 },
   "taint_tracking": { "taint_flows_count": 4, "sanitizer_analysis": { } },
+  "advanced_taint": {
+    "implicit_flows": { "enabled": true, "count": 2 },
+    "path_sensitive": { "enabled": true, "branching_points": 3, "feasible_paths": 3 },
+    "native_jni": { "enabled": true, "jni_methods": 1, "taint_transfers": 2 }
+  },
   "joern_dataflow": { "flows_by_sink": { } },
   "aeg_lite_java": { "success": true, "report": { "poc_count": 1, "patch_count": 1 } },
   "analysis_config": { "sink_signature_preset": "graudit-java" }
@@ -1048,6 +1053,7 @@ pip install -e .
 - `vulnerability_detected`, `vulnerability_type`, `confidence`: primary verdict.
 - `cpg`: CPG summary from Joern.
 - `taint_tracking`: tainted vars, sanitizer analysis, implicit/path/native stats.
+- `advanced_taint`: condensed counters for implicit/path/JNI/context/interprocedural.
 - `joern_dataflow`: reachableByFlows metrics (when enabled).
 - `aeg_lite_java`: PoCs and patches from the Java analyzer.
 - `analysis_config`: run metadata (e.g., requested sink preset).
@@ -1057,6 +1063,7 @@ pip install -e .
 - **Findings** → `vulnerability_detected`, `vulnerability_type`, `confidence`
 - **Joern Flows** → `joern_dataflow.flows_by_sink`
 - **Advanced Taint Analysis** → `taint_tracking.*` (implicit/path/native/interprocedural)
+- **Advanced Taint Summary** → `advanced_taint` (condensed counters)
 - **Sanitizer Analysis** → `taint_tracking.sanitizer_analysis`
 - **AEG-Lite Java (PoCs & Patches)** → `aeg_lite_java.report`
 

@@ -1411,6 +1411,37 @@ def main():
                         result_dict["object_profile"] = fw_result["object_profile"]
                     if "cf_explanation" in fw_result:
                         result_dict["cf_explanation"] = fw_result["cf_explanation"]
+                taint_tracking = result_dict.get("taint_tracking", {}) if isinstance(result_dict.get("taint_tracking", {}), dict) else {}
+                implicit = taint_tracking.get("implicit_flows", {}) if isinstance(taint_tracking.get("implicit_flows", {}), dict) else {}
+                path_sensitive = taint_tracking.get("path_sensitive_analysis", {}) if isinstance(taint_tracking.get("path_sensitive_analysis", {}), dict) else {}
+                native_jni = taint_tracking.get("native_code_analysis", {}) if isinstance(taint_tracking.get("native_code_analysis", {}), dict) else {}
+                context_sensitive = taint_tracking.get("context_sensitive_analysis", {}) if isinstance(taint_tracking.get("context_sensitive_analysis", {}), dict) else {}
+                interprocedural = taint_tracking.get("interprocedural_analysis", {}) if isinstance(taint_tracking.get("interprocedural_analysis", {}), dict) else {}
+                result_dict["advanced_taint"] = {
+                    "implicit_flows": {
+                        "enabled": bool(implicit.get("enabled", False)),
+                        "count": int(implicit.get("count", 0) or 0),
+                    },
+                    "path_sensitive": {
+                        "enabled": bool(path_sensitive.get("enabled", False)),
+                        "branching_points": int(path_sensitive.get("branching_points", 0) or 0),
+                        "feasible_paths": int(path_sensitive.get("feasible_paths", 0) or 0),
+                        "infeasible_paths": int(path_sensitive.get("infeasible_paths", 0) or 0),
+                    },
+                    "native_jni": {
+                        "enabled": bool(native_jni.get("enabled", False)),
+                        "jni_methods": int(native_jni.get("jni_methods", 0) or 0),
+                        "taint_transfers": int(native_jni.get("taint_transfers", 0) or 0),
+                    },
+                    "context_sensitive": {
+                        "contexts_tracked": int(context_sensitive.get("contexts_tracked", 0) or 0),
+                        "k_cfa_limit": int(context_sensitive.get("k_cfa_limit", 0) or 0),
+                    },
+                    "interprocedural": {
+                        "methods_analyzed": int(interprocedural.get("methods_analyzed", 0) or 0),
+                        "methods_with_tainted_params": int(interprocedural.get("methods_with_tainted_params", 0) or 0),
+                    },
+                }
                 if args.aeg_lite_java and source_path and source_path.suffix == ".java":
                     if not AEG_LITE_JAVA_AVAILABLE or not run_aeg_lite_java:
                         result_dict["aeg_lite_java"] = {
