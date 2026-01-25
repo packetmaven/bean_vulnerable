@@ -439,6 +439,12 @@ This section documents the **exact, implementation‑accurate workflow** for usi
 </details>
 
 <details>
+<summary>Tainted Fields + Sanitizer Analysis (field taint + strength)</summary>
+
+![Tainted Fields + Sanitizer Analysis](examples/tainted_fields_sanitizer_analysis.png)
+</details>
+
+<details>
 <summary>DFG Paths list (flow → graphs)</summary>
 
 ![DFG Paths](examples/dfg_paths_list.png)
