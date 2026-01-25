@@ -107,6 +107,11 @@ analysis/*_results*.json
 analysis/cross_validation_summary*.json
 analysis/seed_*_results.json
 
+# Analysis outputs (generated)
+analysis/*.json
+analysis/*.html
+analysis/*/
+
 # Local datasets and tools (keep out of repo)
 datasets/
 tools/
