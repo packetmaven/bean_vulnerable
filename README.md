@@ -402,6 +402,13 @@ This section documents the **exact, implementation‑accurate workflow** for usi
 - **CFG (Control Flow Graph)**: execution order. Use this to validate *control dependencies* and branch feasibility context.
 - **PDG (Program Dependence Graph)**: combined control + data dependencies. Use this as the most complete cross‑check.
 
+**Report sections to use (in order):**
+1. **Findings**: start with the highest-confidence sinks and evidence tags.
+2. **DFG Paths**: jump to the exact flow entry and confirm the source -> sink chain.
+3. **Implicit Flow Details / Path-Sensitive Details**: confirm control-dependency and branch context.
+4. **Graph Index + Graph Gallery**: open the exact CFG/DFG/PDG for the method line range.
+5. **Sink-Specific Gating**: validate the evidence weights and keep/drop decision.
+
 **Operational workflow (step‑by‑step):**
 1. **Start in the report’s “DFG Paths” section** and click the flow you care about. This jumps into `dfg_paths.html` at the exact flow entry.
 2. **Open the source link** (Java file) and confirm the *source → sink* chain in code.
@@ -877,6 +884,12 @@ bean-vuln2 tests/samples/VUL022_IntegerOverflow.java \
 ```
 
 ### **Tai-e Integration & Debugging Utilities (Step-by-step)**
+
+**Why Tai-e helps vulnerability hunting:**
+- **Object-sensitive points-to** reduces false positives when taint flows through fields, collections, or aliases.
+- **More precise call targets** improves interprocedural taint accuracy on virtual calls and framework APIs.
+- **Better context tracking** clarifies which path/method instance actually propagates taint.
+- **Higher-confidence triage** when combined with DFG/PDG graphs and sink gating evidence.
 ```bash
 # 1) Build Tai-e and set TAI_E_HOME
 ./scripts/setup_tai_e.sh
