@@ -591,7 +591,7 @@ When you run `bean-vuln` with the `--html-report` flag, the framework automatica
 
 **Example:** A file with 6 methods generates **18 separate graphs** (6 × 3 types) + **all automatically converted to PNG**
 
-### **Research-Standard Visualization (2024)**
+### **Research-Standard Visualization**
 - **Taint Highlighting**: **LAVENDER (#E6E6FA)** nodes - tainted/unsafe variables
 - **Control Flow**: **FRENCH BLUE (#0055A4) SOLID** edges - execution order  
 - **Data Flow**: **RED (#DC143C) DOTTED** edges - data dependencies
@@ -1024,6 +1024,26 @@ If you want the exact command:
 ```
 
 If you want even better results, bump `--epochs` to 5 or remove `--limit` once it's stable.
+
+**Ordered workflow (local training + use):**
+
+```bash
+# 1) Train a checkpoint (creates checkpoints/spatial_gnn/best_model.pt)
+./venv_cli/bin/python analysis/train_spatial_gnn_pipeline.py \
+  --input tests/samples \
+  --data-dir training_data/samples \
+  --checkpoint-dir checkpoints/spatial_gnn \
+  --epochs 2 \
+  --batch-size 8 \
+  --limit 40 \
+  --device auto
+
+# 2) Run with the trained checkpoint (strict mode)
+./venv_cli/bin/bean-vuln tests/samples/VUL006_XSS_ServletResponse.java \
+  --gnn-checkpoint checkpoints/spatial_gnn/best_model.pt \
+  --require-gnn \
+  --html-report output
+```
 
 > **Note:** `--no-spatial-gnn` is deprecated/ignored in this repo; inference runs when dependencies are available.
 
