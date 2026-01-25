@@ -155,14 +155,13 @@ public class EnhancedPatchTemplateRepository {
         templates.put("CWE-90", new PatchTemplate(
             "CWE-90: LDAP Injection Prevention",
             Arrays.asList(
-                ".*\\.search\\(.*\\+.*\\).*",
-                ".*DirContext.*search.*"
+                "([A-Za-z0-9_]+\\s+\\w+\\s*=\\s*)([A-Za-z0-9_]+)\\.search\\((\"[^\"]*\"|[^,]+),\\s*([^,]+),\\s*([^\\)]+)\\)"
             ),
-            "String safeFilter = userInput.replace(\"\\\\\", \"\\\\5c\")\n" +
-            "  .replace(\"*\", \"\\\\2a\")\n" +
-            "  .replace(\"(\", \"\\\\28\")\n" +
-            "  .replace(\")\", \"\\\\29\");\n" +
-            "// Use safeFilter in LDAP search",
+            "String safeFilter = String.valueOf($4)\n" +
+            "  .replace(\"*\", \"\")\n" +
+            "  .replace(\"(\", \"\")\n" +
+            "  .replace(\")\", \"\");\n" +
+            "$1$2.search($3, safeFilter, $5);",
             Arrays.asList("javax.naming.directory.DirContext"),
             "Escape LDAP filter metacharacters before performing searches"
         ));
@@ -171,14 +170,12 @@ public class EnhancedPatchTemplateRepository {
         templates.put("CWE-611", new PatchTemplate(
             "CWE-611: XXE Prevention",
             Arrays.asList(
-                ".*DocumentBuilderFactory\\.newInstance\\(\\).*",
-                ".*SAXParserFactory\\.newInstance\\(\\).*",
-                ".*XMLInputFactory\\.newInstance\\(\\).*"
+                "DocumentBuilderFactory\\s+(\\w+)\\s*=\\s*DocumentBuilderFactory\\.newInstance\\(\\)\\s*;"
             ),
-            "DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();\n" +
-            "dbf.setFeature(\"http://apache.org/xml/features/disallow-doctype-decl\", true);\n" +
-            "dbf.setFeature(\"http://xml.org/sax/features/external-general-entities\", false);\n" +
-            "dbf.setFeature(\"http://xml.org/sax/features/external-parameter-entities\", false);",
+            "DocumentBuilderFactory $1 = DocumentBuilderFactory.newInstance();\n" +
+            "$1.setFeature(\"http://apache.org/xml/features/disallow-doctype-decl\", true);\n" +
+            "$1.setFeature(\"http://xml.org/sax/features/external-general-entities\", false);\n" +
+            "$1.setFeature(\"http://xml.org/sax/features/external-parameter-entities\", false);",
             Arrays.asList("javax.xml.parsers.DocumentBuilderFactory"),
             "Disable external entities and DTDs in XML parsers"
         ));
@@ -187,12 +184,10 @@ public class EnhancedPatchTemplateRepository {
         templates.put("CWE-113", new PatchTemplate(
             "CWE-113: HTTP Response Splitting Prevention",
             Arrays.asList(
-                ".*setHeader\\(.*\\+.*\\).*",
-                ".*addHeader\\(.*\\+.*\\).*",
-                ".*sendRedirect\\(.*\\+.*\\).*"
+                "([A-Za-z0-9_]+)\\.(setHeader|addHeader)\\(([^,]+),\\s*([^\\)]+)\\)"
             ),
-            "String safeValue = headerValue.replace(\"\\r\", \"\").replace(\"\\n\", \"\");\n" +
-            "response.setHeader(\"Location\", safeValue);",
+            "String safeValue = String.valueOf($4).replace(\"\\\\r\", \"\").replace(\"\\\\n\", \"\");\n" +
+            "$1.$2($3, safeValue);",
             Arrays.asList("javax.servlet.http.HttpServletResponse"),
             "Strip CR/LF and validate header values"
         ));
@@ -201,11 +196,10 @@ public class EnhancedPatchTemplateRepository {
         templates.put("CWE-94", new PatchTemplate(
             "CWE-94: EL Injection Prevention",
             Arrays.asList(
-                ".*\\.eval\\(.*\\+.*\\).*",
-                ".*ExpressionFactory.*create.*Expression.*"
+                "([A-Za-z0-9_]+\\s+\\w+\\s*=\\s*)([A-Za-z0-9_]+)\\.(createValueExpression|createMethodExpression)\\(([^,]+),\\s*([^,]+),"
             ),
-            "String safeExpr = expr.replaceAll(\"[^a-zA-Z0-9_{}$]\", \"\");\n" +
-            "// Evaluate only allowlisted expressions",
+            "String safeExpr = String.valueOf($5).replaceAll(\"[^a-zA-Z0-9_{}]\", \"\");\n" +
+            "$1$2.$3($4, safeExpr,",
             Arrays.asList("javax.el.ExpressionFactory"),
             "Allowlist and sanitize EL expressions before evaluation"
         ));
@@ -214,13 +208,13 @@ public class EnhancedPatchTemplateRepository {
         templates.put("CWE-470", new PatchTemplate(
             "CWE-470: Reflection Allowlisting",
             Arrays.asList(
-                ".*Class\\.forName\\(.*\\).*",
-                ".*Method\\.invoke\\(.*\\).*"
+                "Class\\.forName\\(([^\\)]+)\\)"
             ),
-            "if (!className.startsWith(\"com.beanvulnerable.\")) {\n" +
+            "String safeClass = String.valueOf($1);\n" +
+            "if (!safeClass.startsWith(\"com.beanvulnerable.\")) {\n" +
             "  throw new SecurityException(\"Invalid class\");\n" +
             "}\n" +
-            "Class<?> clazz = Class.forName(className);",
+            "Class<?> clazz = Class.forName(safeClass);",
             Arrays.asList("java.lang.Class"),
             "Allowlist class and method names before reflection"
         ));
@@ -229,10 +223,9 @@ public class EnhancedPatchTemplateRepository {
         templates.put("CWE-502", new PatchTemplate(
             "CWE-502: Safe Deserialization",
             Arrays.asList(
-                ".*new ObjectInputStream\\(.*\\).*",
-                ".*readObject\\(\\).*"
+                "ObjectInputStream\\s+(\\w+)\\s*=\\s*new\\s+ObjectInputStream\\(([^\\)]+)\\)\\s*;"
             ),
-            "ObjectInputStream ois = new ObjectInputStream(input) {\n" +
+            "ObjectInputStream $1 = new ObjectInputStream($2) {\n" +
             "  @Override\n" +
             "  protected Class<?> resolveClass(ObjectStreamClass desc)\n" +
             "    throws IOException, ClassNotFoundException {\n" +
@@ -250,13 +243,14 @@ public class EnhancedPatchTemplateRepository {
         templates.put("CWE-601", new PatchTemplate(
             "CWE-601: Open Redirect Prevention",
             Arrays.asList(
-                ".*sendRedirect\\(.*\\+.*\\).*",
+                "([A-Za-z0-9_]+)\\.sendRedirect\\(([^\\)]+)\\)",
                 ".*RedirectView.*setUrl.*"
             ),
-            "if (!target.startsWith(\"/\")) {\n" +
-            "  throw new SecurityException(\"Invalid redirect\");\n" +
+            "String safeTarget = String.valueOf($2).replace(\"\\\\r\", \"\").replace(\"\\\\n\", \"\");\n" +
+            "if (!safeTarget.startsWith(\"http://\") && !safeTarget.startsWith(\"https://\") && !safeTarget.startsWith(\"/\")) {\n" +
+            "  safeTarget = \"/\";\n" +
             "}\n" +
-            "response.sendRedirect(target);",
+            "$1.sendRedirect(safeTarget);",
             Arrays.asList("javax.servlet.http.HttpServletResponse"),
             "Validate redirect targets against allowlists"
         ));

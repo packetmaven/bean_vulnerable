@@ -1107,6 +1107,8 @@ def main():
     ap.add_argument("--comprehensive", action="store_true", 
                    help="Enable all advanced features (hybrid + RL + property testing)")
     ap.add_argument("--joern-timeout", type=int, default=480, help="Joern operation timeout")
+    ap.add_argument("--sink-signature-preset",
+                    help="Reserved: record a sink signature preset request (e.g., graudit-java). No effect in this build.")
     ap.add_argument("--tai-e", action="store_true",
                     help="Enable Tai-e object-sensitive pointer analysis (requires Tai-e installed)")
     ap.add_argument("--tai-e-home",
@@ -1387,6 +1389,9 @@ def main():
                         'confidence_breakdown': result.confidence_breakdown or {}
                     }
                 }
+                sink_preset = getattr(args, "sink_signature_preset", None)
+                if sink_preset:
+                    result_dict.setdefault("analysis_config", {})["sink_signature_preset"] = sink_preset
                 if isinstance(fw_result, dict):
                     result_dict.setdefault("taint_tracking", fw_result.get("taint_tracking", {}))
                     result_dict.setdefault("joern_dataflow", fw_result.get("joern_dataflow", {}))

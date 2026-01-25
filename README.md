@@ -11,6 +11,10 @@ A vulnerability analysis framework with experimental GNN modules; heuristic scor
 
 - [🎯 Overview](#-overview)
 - [🚀 Quick Start](#-quick-start)
+  - [Two CLI Options](#-two-cli-options)
+  - [How / Why / When to use the CLI](#-how--why--when-to-use-the-cli)
+  - [Decision Tree (pick the right CLI)](#-decision-tree-pick-the-right-cli)
+  - [Quickstart (minimal copy/paste)](#-quickstart-minimal-copypaste)
 - [📸 Example Outputs](#-example-outputs)
   - [Tainted Variables Detection](#tainted-variables-detection)
   - [Alias Analysis Results](#alias-analysis-results)
@@ -532,6 +536,15 @@ java -cp target/aeg-lite-java-0.1.0-all.jar \
   com.beanvulnerable.aeg.AegLiteRunner \
   --source path/to/file.java \
   --generate-pocs --generate-patches
+
+# (Optional) LDAP/EL examples with HTML + enhanced patches (CLI wrapper)
+bean-vuln tests/samples/VUL007_LDAP_Injection.java \
+  --aeg-lite-java --aeg-lite-pocs --aeg-lite-patches --aeg-lite-enhanced-patches \
+  --html-report output_ldap --summary
+
+bean-vuln tests/samples/VUL024_ExpressionLanguageInjection.java \
+  --aeg-lite-java --aeg-lite-pocs --aeg-lite-patches --aeg-lite-enhanced-patches \
+  --html-report output_el --summary
 
 # (Optional) Add extra classpath for compile-time deps
 java -cp target/aeg-lite-java-0.1.0-all.jar \
