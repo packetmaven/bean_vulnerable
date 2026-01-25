@@ -1863,7 +1863,7 @@ bean-vuln tests/samples/VUL001_SQLInjection_Basic.java \
 
 ## 🔒 Security Policy
 
-**Reporting Vulnerabilities:** Please report security issues to packetmaven@hushmail.com
+**Reporting Vulnerabilities:** Please open a security pull request on GitHub (see `SECURITY.md`).
 
 For detailed information about our security policy, vulnerability disclosure process, and supported versions, see:
 
@@ -1915,7 +1915,7 @@ For issues or questions:
 **Get Help:**
 - 📖 Documentation issues? Check our guides above
 - 🐛 Found a bug? Open a [GitHub Issue](https://github.com/packetmaven/bean_vulnerable/issues)
-- 🔒 Security concern? Email packetmaven@hushmail.com
+- 🔒 Security concern? Open a security pull request (see `SECURITY.md`)
 - 💡 Feature request? See [CONTRIBUTING.md](CONTRIBUTING.md)
 
 ---

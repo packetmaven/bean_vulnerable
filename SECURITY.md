@@ -8,10 +8,10 @@ The Bean Vulnerable GNN Framework is a security research tool designed to detect
 
 **Please do NOT report security vulnerabilities through public GitHub issues.**
 
-Instead, please report security vulnerabilities to:
+Instead, please open a **security pull request** on GitHub:
 
-- **Email:** packetmaven@hushmail.com
-- **Subject Line:** `[SECURITY] Bean Vulnerable - [Brief Description]`
+- **Title:** `[SECURITY] Bean Vulnerable - [Brief Description]`
+- **Scope:** Include only the minimal changes or proof needed to reproduce/fix
 
 Please include the following information:
 
@@ -35,9 +35,9 @@ Please include the following information:
 
 We follow **coordinated vulnerability disclosure** principles:
 
-1. Reporter notifies us privately
+1. Reporter opens a security PR with details
 2. We investigate and develop a fix
-3. We release a patch
+3. We merge and release a patch
 4. We publicly disclose the vulnerability (with credit to reporter if desired)
 
 **Embargo Period:** We request a 90-day embargo before public disclosure to allow users time to update.

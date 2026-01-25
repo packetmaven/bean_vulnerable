@@ -457,7 +457,7 @@ When adding new benchmarks or datasets:
 ## 📧 Contact
 
 - **Issues:** GitHub Issues
-- **Security:** packetmaven@hushmail.com
+- **Security:** Open a security pull request (see `SECURITY.md`)
 - **General Questions:** GitHub Discussions (when enabled)
 
 ## 🙏 Recognition
