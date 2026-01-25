@@ -814,14 +814,21 @@ def consolidate_analysis_results(results: Dict[str, Any], methods: List[str]) ->
     vulnerability_types = set()
     severities = []
     
+    method_key_map = {
+        'hybrid_dynamic': 'hybrid',
+        'property_based': 'property',
+        'rl_guided': 'rl_exploration'
+    }
+
     # Collect votes from each method
     LOG.info(f"🔍 Starting to process {len(methods)} methods")
     for method in methods:
-        if method not in results:
+        result_key = method_key_map.get(method, method)
+        if result_key not in results:
             LOG.warning(f"Method {method} not in results")
             continue
             
-        result = results[method]
+        result = results[result_key]
         weight = method_weights.get(method, 0.1)
         
         LOG.info(f"📋 Processing method: {method}, result type: {type(result)}")
@@ -1010,6 +1017,18 @@ def _write_dfg_paths_file(analysis_result: Dict[str, Any], report_dir: Path) -> 
         for var in tainted_vars:
             content += f"  • {var}\n"
         content += "\n"
+
+    # Add implicit flows summary when available
+    implicit_summary = taint_tracking.get("implicit_flows", {}) if isinstance(taint_tracking, dict) else {}
+    implicit_vars = implicit_summary.get("variables", {}) if isinstance(implicit_summary, dict) else {}
+    if implicit_vars:
+        content += "\n═══════════════════════════════════════════════════════════════\n"
+        content += "  IMPLICIT FLOWS SUMMARY\n"
+        content += "═══════════════════════════════════════════════════════════════\n\n"
+        for idx, (target, controls) in enumerate(implicit_vars.items(), 1):
+            control_text = ", ".join(controls) if controls else "control-dependent"
+            content += f"IMPLICIT FLOW {idx}: {target} <- {control_text}\n"
+        content += "\n"
     
     content += "═══════════════════════════════════════════════════════════════\n"
     content += f"Analysis completed. Output: {report_dir}/dfg_paths.txt\n"
@@ -1040,8 +1059,8 @@ def main():
     
     # Analysis mode selection
     ap.add_argument("--mode", choices=[mode.value for mode in AnalysisMode], 
-                   default=AnalysisMode.STATIC_ONLY.value,
-                   help="Analysis mode selection (default: static)")
+                   default=AnalysisMode.COMPREHENSIVE.value,
+                   help="Analysis mode selection (default: comprehensive)")
     
     # Enhanced analysis options (research-based)
     ap.add_argument("--hybrid-analysis", action="store_true",
@@ -1089,6 +1108,8 @@ def main():
                     help="Temperature for calibrating GNN confidence (default: 1.0)")
     ap.add_argument("--gnn-ensemble", type=int, default=1,
                     help="Number of GNN checkpoints to use in ensemble (default: 1)")
+    ap.add_argument("--require-gnn", action="store_true",
+                    help="Fail the run unless Spatial GNN is fully initialized (requires torch/torch-geometric + --gnn-checkpoint)")
     ap.add_argument("--aeg-lite-java", action="store_true",
                     help="Run experimental AEG-Lite Java bytecode analyzer (ASM-based)")
     ap.add_argument("--aeg-java-home",
@@ -1232,6 +1253,15 @@ def main():
         args.spatial_gnn = True
         args.explain = True
 
+    analysis_mode = AnalysisMode(args.mode)
+    if analysis_mode in (AnalysisMode.HYBRID, AnalysisMode.COMPREHENSIVE):
+        args.hybrid_analysis = True
+    if analysis_mode in (AnalysisMode.PROPERTY_BASED, AnalysisMode.COMPREHENSIVE):
+        args.property_testing = True
+    if analysis_mode == AnalysisMode.COMPREHENSIVE:
+        args.rl_prioritization = True
+        args.taint_tracking = True
+
     if args.hybrid_analysis or args.rl_prioritization or args.property_testing or args.taint_tracking:
         LOG.warning(
             "⚠️ Experimental features enabled: hybrid/RL/property testing are stubs and "
@@ -1240,7 +1270,7 @@ def main():
     
     # Create analysis configuration
     config = AnalysisConfiguration(
-        mode=AnalysisMode(args.mode),
+        mode=analysis_mode,
         enable_concolic=args.hybrid_analysis,
         enable_rl_prioritization=args.rl_prioritization,
         enable_property_testing=args.property_testing, 
@@ -1259,6 +1289,14 @@ def main():
     # Initialize enhanced framework
     LOG.info("🚀 Bean Vulnerable Enhanced Framework - Initializing...")
     fw, hybrid_analyzer = initialize_framework(args)
+
+    if args.require_gnn:
+        if not getattr(fw, "spatial_gnn_model", None):
+            LOG.error("❌ --require-gnn set, but Spatial GNN is not initialized. Install torch + torch-geometric and retry.")
+            sys.exit(2)
+        if not getattr(fw, "gnn_weights_loaded", False):
+            LOG.error("❌ --require-gnn set, but no GNN checkpoint is loaded. Provide --gnn-checkpoint.")
+            sys.exit(2)
     
     # Display configuration
     print("🎯 Bean Vulnerable Enhanced Framework v2.0")

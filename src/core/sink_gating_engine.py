@@ -380,6 +380,18 @@ class SinkGatingEngine:
         )
         passes_gate = final_confidence >= threshold
 
+        evidence_breakdown = []
+        for item in evidence:
+            weight = gating_config.evidence_weight_override.get(
+                item.evidence_type,
+                self._get_default_weight(item.evidence_type),
+            )
+            weight_source = "override" if item.evidence_type in gating_config.evidence_weight_override else "default"
+            payload = item.to_dict()
+            payload["weight"] = float(weight)
+            payload["weight_source"] = weight_source
+            evidence_breakdown.append(payload)
+
         return final_confidence, passes_gate, {
             "sink_name": sink_name,
             "cwe_id": gating_config.cwe_id,
@@ -390,7 +402,7 @@ class SinkGatingEngine:
             "passes_gate": passes_gate,
             "flow_type": "direct" if is_direct_flow else "indirect",
             "evidence_count": len(evidence),
-            "evidence_breakdown": [e.to_dict() for e in evidence],
+            "evidence_breakdown": evidence_breakdown,
         }
 
     def _meets_evidence_requirements(
