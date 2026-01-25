@@ -28,6 +28,13 @@ from core.taint_debugging.interactive_cli import launch_debugger_from_result
 from core.performance.profiling_harness import ProfilingConfiguration, MultiLayerProfiler
 from core.performance.object_profiler import ObjectCentricProfiler
 
+try:
+    from extensions.aeg_java_bridge import run_aeg_lite_java
+    AEG_LITE_JAVA_AVAILABLE = True
+except Exception:
+    run_aeg_lite_java = None
+    AEG_LITE_JAVA_AVAILABLE = False
+
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 LOG = logging.getLogger(__name__)
@@ -469,6 +476,27 @@ def analyze_path(
                 result['technical_details'] = tech
             
             if cli_args:
+                if getattr(cli_args, "aeg_lite_java", False):
+                    if not AEG_LITE_JAVA_AVAILABLE or not run_aeg_lite_java:
+                        result["aeg_lite_java"] = {
+                            "success": False,
+                            "error": "AEG-Lite Java bridge unavailable.",
+                            "analysis_method": "asm_bytecode",
+                        }
+                    else:
+                        enhanced_scan = getattr(cli_args, "aeg_lite_enhanced_scan", False)
+                        enhanced_patches = getattr(cli_args, "aeg_lite_enhanced_patches", False)
+                        if enhanced_patches:
+                            enhanced_scan = True
+                        result["aeg_lite_java"] = run_aeg_lite_java(
+                            p,
+                            java_home=getattr(cli_args, "aeg_java_home", None),
+                            generate_pocs=getattr(cli_args, "aeg_lite_pocs", False),
+                            generate_patches=getattr(cli_args, "aeg_lite_patches", False),
+                            use_joern=getattr(cli_args, "joern_dataflow", False),
+                            enhanced_scan=enhanced_scan,
+                            enhanced_patches=enhanced_patches,
+                        )
                 _apply_debug_utilities(result, p, cli_args, report_dir)
             return result
             
@@ -920,6 +948,18 @@ def main():
                     help="Temperature for calibrating GNN confidence (default: 1.0)")
     ap.add_argument("--gnn-ensemble", type=int, default=1,
                     help="Number of GNN checkpoints to use in ensemble (default: 1)")
+    ap.add_argument("--aeg-lite-java", action="store_true",
+                    help="Run experimental AEG-Lite Java bytecode analyzer (ASM-based)")
+    ap.add_argument("--aeg-java-home",
+                    help="JAVA_HOME override for AEG-Lite Java analyzer")
+    ap.add_argument("--aeg-lite-pocs", action="store_true",
+                    help="Generate PoCs in AEG-Lite Java analyzer")
+    ap.add_argument("--aeg-lite-patches", action="store_true",
+                    help="Generate patches in AEG-Lite Java analyzer")
+    ap.add_argument("--aeg-lite-enhanced-scan", action="store_true",
+                    help="Run enhanced source scanner (pattern/AST/semantic/taint) via AEG-Lite Java")
+    ap.add_argument("--aeg-lite-enhanced-patches", action="store_true",
+                    help="Generate enhanced template patches (implies --aeg-lite-enhanced-scan)")
     ap.add_argument("--joern-dataflow", action="store_true",
                     help="Enable Joern reachableByFlows dataflow extraction for gating")
     ap.add_argument("--joern-timeout", type=int, default=480, metavar="SECONDS",
@@ -964,6 +1004,18 @@ def main():
                     help="Path to write taint flow graph HTML")
     ap.add_argument("--taint-debug", action="store_true",
                     help="Launch interactive taint debugger (single input only)")
+    ap.add_argument("--implicit-flows", dest="implicit_flows", action="store_true", default=True,
+                    help="Enable implicit flow tracking (default: enabled)")
+    ap.add_argument("--no-implicit-flows", dest="implicit_flows", action="store_false",
+                    help="Disable implicit flow tracking")
+    ap.add_argument("--path-sensitive", dest="path_sensitive", action="store_true", default=True,
+                    help="Enable path-sensitive analysis (default: enabled)")
+    ap.add_argument("--no-path-sensitive", dest="path_sensitive", action="store_false",
+                    help="Disable path-sensitive analysis")
+    ap.add_argument("--native-jni", dest="native_jni", action="store_true", default=True,
+                    help="Enable native (JNI) taint tracking (default: enabled)")
+    ap.add_argument("--no-native-jni", dest="native_jni", action="store_false",
+                    help="Disable native (JNI) taint tracking")
     ap.add_argument("--tai-e-precision-diagnose", action="store_true",
                     help="Run heuristic precision diagnosis for Tai-e runs")
     ap.add_argument("--tai-e-profile", action="store_true",
@@ -1000,6 +1052,8 @@ def main():
                     help="Run full analysis with all features (ensemble + advanced-features + spatial-gnn + explain)")
     
     args = ap.parse_args()
+    if args.html_report and not args.joern_dataflow:
+        args.joern_dataflow = True
     if args.tai_e_taint_config:
         args.tai_e_taint = True
     if args.tai_e_taint and not args.tai_e_taint_config:
@@ -1042,6 +1096,9 @@ def main():
         gnn_temperature=args.gnn_temperature,
         gnn_ensemble=args.gnn_ensemble,
         enable_joern_dataflow=args.joern_dataflow,
+        enable_implicit_flows=args.implicit_flows,
+        enable_path_sensitive=args.path_sensitive,
+        enable_native_jni=args.native_jni,
         enable_tai_e=args.tai_e,
         tai_e_home=args.tai_e_home,
         tai_e_cs=args.tai_e_cs,

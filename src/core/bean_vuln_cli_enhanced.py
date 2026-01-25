@@ -47,6 +47,13 @@ from core.precision_debugging.diagnosis import analyze_source
 from core.performance.profiling_harness import ProfilingConfiguration, MultiLayerProfiler
 from core.performance.object_profiler import ObjectCentricProfiler
 
+try:
+    from extensions.aeg_java_bridge import run_aeg_lite_java
+    AEG_LITE_JAVA_AVAILABLE = True
+except Exception:
+    run_aeg_lite_java = None
+    AEG_LITE_JAVA_AVAILABLE = False
+
 # Enhanced logging configuration
 logging.basicConfig(
     level=logging.INFO,
@@ -900,6 +907,9 @@ def initialize_framework(args) -> Tuple[Any, Optional[Any]]:
             gnn_temperature=args.gnn_temperature,
             gnn_ensemble=args.gnn_ensemble,
             enable_joern_dataflow=args.joern_dataflow,
+            enable_implicit_flows=args.implicit_flows,
+            enable_path_sensitive=args.path_sensitive,
+            enable_native_jni=args.native_jni,
             enable_tai_e=args.tai_e,
             tai_e_home=args.tai_e_home,
             tai_e_cs=args.tai_e_cs,
@@ -1079,6 +1089,18 @@ def main():
                     help="Temperature for calibrating GNN confidence (default: 1.0)")
     ap.add_argument("--gnn-ensemble", type=int, default=1,
                     help="Number of GNN checkpoints to use in ensemble (default: 1)")
+    ap.add_argument("--aeg-lite-java", action="store_true",
+                    help="Run experimental AEG-Lite Java bytecode analyzer (ASM-based)")
+    ap.add_argument("--aeg-java-home",
+                    help="JAVA_HOME override for AEG-Lite Java analyzer")
+    ap.add_argument("--aeg-lite-pocs", action="store_true",
+                    help="Generate PoCs in AEG-Lite Java analyzer")
+    ap.add_argument("--aeg-lite-patches", action="store_true",
+                    help="Generate patches in AEG-Lite Java analyzer")
+    ap.add_argument("--aeg-lite-enhanced-scan", action="store_true",
+                    help="Run enhanced source scanner (pattern/AST/semantic/taint) via AEG-Lite Java")
+    ap.add_argument("--aeg-lite-enhanced-patches", action="store_true",
+                    help="Generate enhanced template patches (implies --aeg-lite-enhanced-scan)")
     ap.add_argument("--joern-dataflow", action="store_true",
                     help="Enable Joern reachableByFlows dataflow extraction for gating")
     ap.add_argument("--explain", action="store_true", help="Generate explanations")
@@ -1125,6 +1147,18 @@ def main():
                     help="Path to write taint flow graph HTML")
     ap.add_argument("--taint-debug", action="store_true",
                     help="Launch interactive taint debugger (single input only)")
+    ap.add_argument("--implicit-flows", dest="implicit_flows", action="store_true", default=True,
+                    help="Enable implicit flow tracking (default: enabled)")
+    ap.add_argument("--no-implicit-flows", dest="implicit_flows", action="store_false",
+                    help="Disable implicit flow tracking")
+    ap.add_argument("--path-sensitive", dest="path_sensitive", action="store_true", default=True,
+                    help="Enable path-sensitive analysis (default: enabled)")
+    ap.add_argument("--no-path-sensitive", dest="path_sensitive", action="store_false",
+                    help="Disable path-sensitive analysis")
+    ap.add_argument("--native-jni", dest="native_jni", action="store_true", default=True,
+                    help="Enable native (JNI) taint tracking (default: enabled)")
+    ap.add_argument("--no-native-jni", dest="native_jni", action="store_false",
+                    help="Disable native (JNI) taint tracking")
     ap.add_argument("--tai-e-precision-diagnose", action="store_true",
                     help="Run heuristic precision diagnosis for Tai-e runs")
     ap.add_argument("--tai-e-profile", action="store_true",
@@ -1162,6 +1196,8 @@ def main():
                    help="Run comprehensive benchmark evaluation")
     
     args = ap.parse_args()
+    if args.html_report and not args.joern_dataflow:
+        args.joern_dataflow = True
     if not args.spatial_gnn:
         LOG.warning("⚠️ Ignoring --no-spatial-gnn; spatial GNN is always enabled.")
         args.spatial_gnn = True
@@ -1278,7 +1314,8 @@ def main():
             elif isinstance(result_tuple, VulnerabilityResult):
                 # Fallback for old format
                 result = result_tuple
-                framework_results.append({})
+                fw_result = {}
+                framework_results.append(fw_result)
             else:
                 LOG.error(f"Unexpected result type: {type(result_tuple)}")
                 continue
@@ -1350,6 +1387,48 @@ def main():
                         'confidence_breakdown': result.confidence_breakdown or {}
                     }
                 }
+                if isinstance(fw_result, dict):
+                    result_dict.setdefault("taint_tracking", fw_result.get("taint_tracking", {}))
+                    result_dict.setdefault("joern_dataflow", fw_result.get("joern_dataflow", {}))
+                    result_dict.setdefault("framework_sinks", fw_result.get("framework_sinks", {}))
+                    result_dict.setdefault("template_engine_analysis", fw_result.get("template_engine_analysis", {}))
+                    result_dict.setdefault("taint_gating", fw_result.get("taint_gating", {}))
+                    result_dict.setdefault("evidence", fw_result.get("evidence", {}))
+                    result_dict.setdefault("technical_details", fw_result.get("technical_details", {}))
+                    result_dict.setdefault("cpg", fw_result.get("cpg", {}))
+                    if "taint_graph" in fw_result:
+                        result_dict["taint_graph"] = fw_result["taint_graph"]
+                    if "soundness_validation" in fw_result:
+                        result_dict["soundness_validation"] = fw_result["soundness_validation"]
+                    if "tai_e_profiling" in fw_result:
+                        result_dict["tai_e_profiling"] = fw_result["tai_e_profiling"]
+                    if "object_profile" in fw_result:
+                        result_dict["object_profile"] = fw_result["object_profile"]
+                    if "cf_explanation" in fw_result:
+                        result_dict["cf_explanation"] = fw_result["cf_explanation"]
+                if args.aeg_lite_java and source_path and source_path.suffix == ".java":
+                    if not AEG_LITE_JAVA_AVAILABLE or not run_aeg_lite_java:
+                        result_dict["aeg_lite_java"] = {
+                            "success": False,
+                            "error": "AEG-Lite Java bridge unavailable.",
+                            "analysis_method": "asm_bytecode",
+                        }
+                    else:
+                        enhanced_scan = getattr(args, "aeg_lite_enhanced_scan", False)
+                        enhanced_patches = getattr(args, "aeg_lite_enhanced_patches", False)
+                        if enhanced_patches:
+                            enhanced_scan = True
+                        result_dict["aeg_lite_java"] = run_aeg_lite_java(
+                            source_path,
+                            java_home=getattr(args, "aeg_java_home", None),
+                            generate_pocs=getattr(args, "aeg_lite_pocs", False),
+                            generate_patches=getattr(args, "aeg_lite_patches", False),
+                            use_joern=getattr(args, "joern_dataflow", False),
+                            enhanced_scan=enhanced_scan,
+                            enhanced_patches=enhanced_patches,
+                        )
+                    if isinstance(fw_result, dict):
+                        fw_result["aeg_lite_java"] = result_dict.get("aeg_lite_java")
                 results.append(result_dict)
     
     except Exception as e:

@@ -15,6 +15,9 @@
 
 import java.io.PrintWriter
 import java.nio.file.{Files, Paths}
+import io.shiftleft.codepropertygraph.generated._
+import io.shiftleft.semanticcpg.language._
+import io.joern.dataflowengineoss.language._
 
 @main def exec(cpgFile: String, outputDir: String) = {
     val outputPath = Paths.get(outputDir)
@@ -190,27 +193,34 @@ import java.nio.file.{Files, Paths}
     }.l
 
     println("Computing reachableByFlows statistics...")
-    val sourcePattern = "(?i)getparameter|getheader|getcookie|getinputstream|getreader|readline|read|nextline"
-    val sources = cpg.call.name(sourcePattern)
-    val sourceCount = try { sources.size } catch { case _: Throwable => 0 }
+    val sourcePattern = "(?i)getparameter|getparametervalues|getquerystring|getheader|getheaders|getcookie|getcookies|getinputstream|getreader|readline|read|nextline|next|nextint|nextlong|nextdouble|nextfloat|nextboolean|nextbyte|nextshort|nextbiginteger|nextbigdecimal|scanner|bufferedreader|inputstreamreader|console"
+    val callSources = cpg.call.name(sourcePattern).l
+    val paramPattern = "(?i).*(user|input|param|request|req|query|q|id|name|password|pass|pwd|token|secret|key|path|file|filename|host|url|uri|cmd|command).*"
+    val paramSources = cpg.method.parameter.filter(p => p.name.matches(paramPattern)).l
+    val identSources = cpg.identifier.name(paramPattern).l
+    val sourceCount = try { callSources.size + paramSources.size + identSources.size } catch { case _: Throwable => 0 }
 
     val sinkPatterns = Map(
-        "sql_injection" -> "(?i)executequery|executeupdate|execute\\(|preparestatement|createquery|createstatement|preparecall|nativequery",
-        "command_injection" -> "(?i)exec|start",
-        "path_traversal" -> "(?i)new\\s+file\\(|fileinputstream|fileoutputstream|filereader|filewriter|paths\\.get|files\\.read|files\\.write",
-        "xss" -> "(?i)getwriter\\(|printwriter|jspwriter|getoutputstream\\(|sendredirect\\(|println\\(|print\\(|write\\(",
-        "ldap_injection" -> "(?i)dircontext|ldap|search\\(|filter",
-        "xxe" -> "(?i)documentbuilderfactory|documentbuilder|saxparser|xmlreader|inputsource",
-        "http_response_splitting" -> "(?i)setheader\\(|addheader\\(|sendredirect\\(|setstatus\\(",
-        "reflection_injection" -> "(?i)class\\.forname|getmethod\\(|invoke\\(|newinstance\\(",
-        "el_injection" -> "(?i)expressionfactory|createvalueexpression\\(|createmethodexpression\\(|elprocessor|expressionevaluator|javax\\.el|jakarta\\.el|velocityengine|templateengine|mustache|handlebars"
+        "sql_injection" -> "(?i).*(executequery|executeupdate|execute|preparestatement|createquery|createstatement|preparecall|nativequery).*",
+        "command_injection" -> "(?i).*(runtime\\.getruntime\\(\\)\\.exec|processbuilder|\\bexec\\b|\\bstart\\b).*",
+        "path_traversal" -> "(?i).*(new\\s+file|fileinputstream|fileoutputstream|filereader|filewriter|path\\.of|paths\\.get|files\\.read|files\\.write|files\\.newinputstream|files\\.newoutputstream|getcanonicalpath|getcanonicalfile).*",
+        "xss" -> "(?i).*(getwriter|getoutputstream|printwriter|jspwriter|sendredirect|println|print|write).*",
+        "ldap_injection" -> "(?i).*(dircontext|initialdircontext|ldap|search|lookup|filter).*",
+        "xxe" -> "(?i).*(documentbuilderfactory|documentbuilder|saxparserfactory|saxparser|xmlreader|xmlinputfactory|inputsource).*",
+        "http_response_splitting" -> "(?i).*(setheader|addheader|sendredirect|setstatus|addcookie).*",
+        "reflection_injection" -> "(?i).*(class\\.forname|getmethod|getdeclaredmethod|invoke|newinstance|constructor).*",
+        "el_injection" -> "(?i).*(expressionfactory|createvalueexpression|createmethodexpression|elprocessor|expressionevaluator|javax\\.el|jakarta\\.el|velocityengine|templateengine|mustache|handlebars|scriptengine|eval).*"
     )
 
     val flowsBySinkJson = sinkPatterns.map { case (label, pattern) =>
-        val sinks = cpg.call.name(pattern)
-        val sinkCount = try { sinks.size } catch { case _: Throwable => 0 }
+        val sinkCalls = cpg.call.filter(call => call.name.matches(pattern) || call.code.matches(pattern)).l
+        val sinkCount = try { sinkCalls.size } catch { case _: Throwable => 0 }
+        val sinkArgs = sinkCalls.flatMap(call => call.argument.l)
         val flowCount = try {
-            sources.reachableByFlows(sinks).l.size
+            val callFlows = sinkArgs.reachableByFlows(callSources).l.size
+            val paramFlows = sinkArgs.reachableByFlows(paramSources).l.size
+            val identFlows = sinkArgs.reachableByFlows(identSources).l.size
+            callFlows + paramFlows + identFlows
         } catch {
             case _: Throwable => 0
         }

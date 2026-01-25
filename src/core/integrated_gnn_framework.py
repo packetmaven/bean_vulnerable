@@ -1344,7 +1344,10 @@ class IntegratedGNNFramework:
         gnn_confidence_threshold: float = 0.5,
         gnn_temperature: float = 1.0,
         gnn_ensemble: int = 1,
-        enable_joern_dataflow: bool = False,
+        enable_joern_dataflow: bool = True,
+        enable_implicit_flows: bool = True,
+        enable_path_sensitive: bool = True,
+        enable_native_jni: bool = True,
         enable_tai_e: bool = False,
         tai_e_home: Optional[str] = None,
         tai_e_cs: str = "1-obj",
@@ -1418,7 +1421,12 @@ class IntegratedGNNFramework:
         # Initialize Comprehensive Taint Tracking
         try:
             from .comprehensive_taint_tracking import ComprehensiveTaintTracker
-            self.taint_tracker = ComprehensiveTaintTracker(tai_e_config=self.tai_e_config)
+            self.taint_tracker = ComprehensiveTaintTracker(
+                tai_e_config=self.tai_e_config,
+                enable_implicit_flows=enable_implicit_flows,
+                enable_path_sensitive=enable_path_sensitive,
+                enable_native_jni=enable_native_jni,
+            )
             self.logger.info("✅ Comprehensive Taint Tracking initialized (external module)")
         except ImportError:
             self.taint_tracker = None
@@ -2621,23 +2629,28 @@ class IntegratedGNNFramework:
             joern_flows = int(joern_flow_hits.get(vuln, 0) or 0)
             joern_sources = int(joern_source_counts.get(vuln, 0) or 0)
             joern_sinks = int(joern_sink_counts.get(vuln, 0) or 0)
+            sink_hits_for_vuln = int(evidence.get("sink_hits", {}).get(vuln, 0) or 0)
             if joern_sinks > 0 and joern_sources > 0 and joern_flows == 0:
-                dropped.append({
-                    "vulnerability": vuln,
-                    "reason": "joern_unreachable",
-                    "joern_sources": joern_sources,
-                    "joern_sinks": joern_sinks,
-                })
-                decisions.append({
-                    "vulnerability": vuln,
-                    "passed": False,
-                    "confidence": 0.0,
-                    "threshold": None,
-                    "flow_type": "joern_unreachable",
-                    "evidence_types": [],
-                    "reason": "joern_unreachable",
-                })
-                continue
+                if taint_flows > 0 or sink_hits_for_vuln > 0 or user_input_hits > 0:
+                    # Joern reported no flows, but other evidence exists; do not block.
+                    pass
+                else:
+                    dropped.append({
+                        "vulnerability": vuln,
+                        "reason": "joern_unreachable",
+                        "joern_sources": joern_sources,
+                        "joern_sinks": joern_sinks,
+                    })
+                    decisions.append({
+                        "vulnerability": vuln,
+                        "passed": False,
+                        "confidence": 0.0,
+                        "threshold": None,
+                        "flow_type": "joern_unreachable",
+                        "evidence_types": [],
+                        "reason": "joern_unreachable",
+                    })
+                    continue
 
             if self.sink_gating_engine and SINK_GATING_AVAILABLE:
                 evidence_items, is_direct_flow = self._build_sink_evidence(vuln, evidence)
