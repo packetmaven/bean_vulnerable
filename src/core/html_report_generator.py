@@ -19,6 +19,8 @@ from datetime import datetime
 import html as html_lib
 import webbrowser
 import shutil
+import re
+import json
 
 
 def generate_comprehensive_html_report(result: Dict[str, Any], report_dir: Path, command_line: str = ""):
@@ -44,13 +46,20 @@ def generate_comprehensive_html_report(result: Dict[str, Any], report_dir: Path,
     
     # Copy source Java file to report directory for easy access
     input_file = result.get('input', '')
-    if input_file and Path(input_file).exists() and Path(input_file).suffix == '.java':
-        source_path = Path(input_file)
-        dest_path = report_dir / source_path.name
-        try:
-            shutil.copy2(source_path, dest_path)
-        except Exception as e:
-            print(f"Warning: Could not copy source file: {e}")
+    source_href = None
+    if input_file:
+        source_path = Path(input_file).expanduser()
+        if source_path.exists() and source_path.suffix == '.java':
+            dest_path = report_dir / source_path.name
+            source_href = source_path.name
+            try:
+                shutil.copy2(source_path, dest_path)
+            except Exception as e:
+                print(f"Warning: Could not copy source file: {e}")
+                try:
+                    source_href = source_path.resolve().as_uri()
+                except Exception:
+                    source_href = None
     
     # Extract data
     taint_tracking = result.get('taint_tracking', {})
@@ -94,6 +103,14 @@ def generate_comprehensive_html_report(result: Dict[str, Any], report_dir: Path,
     interprocedural = taint_tracking.get('interprocedural_analysis', {})
     
     # Generate HTML
+    # Build linkable DFG paths HTML if present
+    dfg_paths_entries: Dict[str, List[Dict[str, str]]] = {}
+    dfg_paths_file = report_dir / "dfg_paths.txt"
+    implicit_vars = implicit_flows.get("variables", {}) if isinstance(implicit_flows, dict) else {}
+    if dfg_paths_file.exists():
+        dfg_paths_text = dfg_paths_file.read_text(encoding="utf-8", errors="ignore")
+        dfg_paths_entries = _write_dfg_paths_html(report_dir, dfg_paths_text, implicit_vars)
+
     html_content = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -142,7 +159,7 @@ def generate_comprehensive_html_report(result: Dict[str, Any], report_dir: Path,
 
         {_generate_object_profile_section(object_profile)}
         
-        {_generate_advanced_analysis_section(implicit_flows, context_sensitive, path_sensitive, native_code, interprocedural, object_sensitive_enabled, tai_e_meta)}
+        {_generate_advanced_analysis_section(implicit_flows, context_sensitive, path_sensitive, native_code, interprocedural, object_sensitive_enabled, tai_e_meta, source_href)}
         
         {_generate_triage_checklist()}
         
@@ -155,7 +172,11 @@ def generate_comprehensive_html_report(result: Dict[str, Any], report_dir: Path,
         {_generate_sink_gating_section(result)}
         
         {_generate_file_links_section(result, report_dir)}
+
+        {_generate_dfg_paths_links_section(dfg_paths_entries, report_dir, source_href)}
         
+        {_generate_graph_index_section(report_dir)}
+
         {_generate_cf_explainer_section(cf_explanation) if has_cf_explanation else ""}
         
         {_generate_graph_gallery_section(report_dir)}
@@ -193,6 +214,223 @@ def _render_code_block(code: Optional[str]) -> str:
     if not code:
         return "<em>No payload available.</em>"
     return f"<pre class=\"aeg-code\"><code>{_escape_html(code)}</code></pre>"
+
+
+def _write_dfg_paths_html(
+    report_dir: Path,
+    dfg_paths_text: str,
+    implicit_vars: Optional[Dict[str, List[str]]] = None
+) -> Dict[str, List[Dict[str, str]]]:
+    lines = dfg_paths_text.splitlines()
+    taint_entries: List[Dict[str, str]] = []
+    implicit_entries: List[Dict[str, str]] = []
+
+    # Parse existing entries from the text file
+    for idx, line in enumerate(lines, 1):
+        flow_match = re.match(r'^(?:TAINT )?FLOW (\d+):\s*(.*)', line)
+        if flow_match:
+            flow_id = flow_match.group(1)
+            taint_entries.append({
+                "anchor": f"taint-flow-{flow_id}",
+                "label": line,
+                "line": str(idx),
+            })
+        implicit_match = re.match(r'^IMPLICIT FLOW (\d+):\s*(.*)', line)
+        if implicit_match:
+            flow_id = implicit_match.group(1)
+            implicit_entries.append({
+                "anchor": f"implicit-flow-{flow_id}",
+                "label": line,
+                "line": str(idx),
+            })
+
+    # If implicit flows are missing in the text file, append derived entries for HTML
+    if not implicit_entries and implicit_vars:
+        lines.extend([
+            "",
+            "═══════════════════════════════════════════════════════════════",
+            "  IMPLICIT FLOWS SUMMARY (derived)",
+            "═══════════════════════════════════════════════════════════════",
+            "",
+        ])
+        for idx, (target, controls) in enumerate(implicit_vars.items(), 1):
+            control_text = ", ".join(controls) if controls else "control-dependent"
+            line = f"IMPLICIT FLOW {idx}: {target} <- {control_text}"
+            implicit_entries.append({
+                "anchor": f"implicit-flow-{idx}",
+                "label": line,
+                "line": str(len(lines) + 1),
+            })
+            lines.append(line)
+        lines.append("")
+
+    # Build HTML with line numbers and anchors
+    html_lines: List[str] = []
+    for idx, line in enumerate(lines, 1):
+        anchor_tags = []
+        flow_match = re.match(r'^(?:TAINT )?FLOW (\d+):', line)
+        if flow_match:
+            anchor_tags.append(f'<a id="taint-flow-{flow_match.group(1)}"></a>')
+        implicit_match = re.match(r'^IMPLICIT FLOW (\d+):', line)
+        if implicit_match:
+            anchor_tags.append(f'<a id="implicit-flow-{implicit_match.group(1)}"></a>')
+        anchor_html = "".join(anchor_tags)
+        html_lines.append(
+            "<div class=\"dfg-line\" id=\"L{line_no}\">"
+            "{anchors}<span class=\"dfg-lno\">{line_no:>4}</span> "
+            "<span class=\"dfg-text\">{text}</span></div>".format(
+                line_no=idx,
+                anchors=anchor_html,
+                text=_escape_html(line),
+            )
+        )
+
+    lines_html = "\n".join(html_lines)
+    html_content = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DFG Paths</title>
+  <style>
+    body {{ font-family: "Segoe UI", Arial, sans-serif; background: #f5f7fa; color: #2c3e50; padding: 24px; }}
+    .header {{ margin-bottom: 16px; }}
+    .header a {{ color: #3498db; text-decoration: none; font-weight: 600; }}
+    .dfg-container {{ background: #fff; border: 1px solid #e0e0e0; border-radius: 8px; padding: 16px; }}
+    .dfg-line {{ font-family: "Menlo", "Monaco", monospace; font-size: 13px; line-height: 1.5; white-space: pre-wrap; }}
+    .dfg-lno {{ color: #95a5a6; display: inline-block; width: 42px; text-align: right; margin-right: 10px; }}
+    .dfg-text {{ color: #2c3e50; }}
+  </style>
+</head>
+<body>
+  <div class="header">
+    <a href="index.html">← Back to report</a>
+  </div>
+  <div class="dfg-container">
+    {lines_html}
+  </div>
+</body>
+</html>
+"""
+
+    output_path = report_dir / "dfg_paths.html"
+    output_path.write_text(html_content, encoding="utf-8")
+
+    return {"taint": taint_entries, "implicit": implicit_entries}
+
+
+def _generate_dfg_paths_links_section(
+    paths_entries: Dict[str, List[Dict[str, str]]],
+    report_dir: Path,
+    source_href: Optional[str] = None
+) -> str:
+    if not paths_entries:
+        return ""
+    taint_entries = paths_entries.get("taint", [])
+    implicit_entries = paths_entries.get("implicit", [])
+    if not taint_entries and not implicit_entries:
+        return ""
+
+    index_by_base: Dict[str, Dict[str, Any]] = {}
+    index_path = report_dir / "graph_index.json"
+    if index_path.exists():
+        try:
+            payload = json.loads(index_path.read_text(encoding="utf-8"))
+            if isinstance(payload, list):
+                for entry in payload:
+                    if not isinstance(entry, dict):
+                        continue
+                    base = entry.get("base")
+                    if base:
+                        index_by_base[str(base)] = entry
+        except Exception:
+            index_by_base = {}
+
+    def _line_range_for_base(base: str) -> str:
+        entry = index_by_base.get(base, {})
+        start_line = entry.get("start_line")
+        end_line = entry.get("end_line")
+        if isinstance(start_line, int) and start_line > 0:
+            if isinstance(end_line, int) and end_line > 0 and end_line != start_line:
+                return f"L{start_line}–{end_line}"
+            return f"L{start_line}"
+        return ""
+
+    def _format_graph_links(label: str, files: List[Path], max_items: int = 5) -> str:
+        if not files:
+            return ""
+        items = []
+        for graph_path in files[:max_items]:
+            graph_name = graph_path.name
+            base = graph_path.stem[len(label.lower()) + 1 :] if graph_path.stem.startswith(label.lower()) else graph_path.stem.split("_", 1)[-1]
+            line_range = _line_range_for_base(base)
+            range_text = f' <span style="color: #7f8c8d;">({line_range})</span>' if line_range else ""
+            items.append(f'<a href="{_escape_html(graph_name)}">{_escape_html(graph_name)}</a>{range_text}')
+        suffix = ""
+        if len(files) > max_items:
+            suffix = f" +{len(files) - max_items} more"
+        return f"{label}: " + ", ".join(items) + suffix
+
+    dfg_files = sorted(report_dir.glob("dfg_*.png"))
+    pdg_files = sorted(report_dir.glob("pdg_*.png"))
+    cfg_files = sorted(report_dir.glob("cfg_*.png"))
+
+    taint_graph_links = " · ".join(filter(None, [
+        _format_graph_links("DFG", dfg_files),
+        _format_graph_links("PDG", pdg_files),
+    ]))
+    implicit_graph_links = " · ".join(filter(None, [
+        _format_graph_links("CFG", cfg_files),
+        _format_graph_links("PDG", pdg_files),
+    ]))
+
+    source_link = f'<a href="{_escape_html(source_href)}">source</a>' if source_href else ""
+    graph_link = '<a href="#graph-gallery">graphs</a>'
+    index_link = '<a href="#graph-index">graph index</a>'
+    link_parts = [part for part in (source_link, graph_link, index_link) if part]
+    extra_links = " | ".join(link_parts)
+    extra_suffix = f' <span style="color: #7f8c8d;">({extra_links})</span>' if extra_links else ""
+
+    html = """
+    <div class="section">
+        <h3 style="color: #2c3e50; font-size: 20px; margin-bottom: 15px;">🔗 DFG Paths</h3>
+        <p style="margin-bottom: 6px; color: #6c7a89;">
+            Links jump into <code>dfg_paths.html</code> at the relevant path entry.
+        </p>
+        <p style="margin-bottom: 12px; color: #6c7a89;">
+            Taint flows map to <strong>DFG/PDG</strong> (data dependencies). Implicit flows map to <strong>CFG/PDG</strong> (control dependencies).
+        </p>
+    """
+    if taint_entries:
+        html += """
+        <h4 style="margin-top: 12px;">Taint flows <span style="color: #7f8c8d; font-weight: normal;">(DFG/PDG)</span></h4>
+        <ul style="list-style: none; padding-left: 0;">
+        """
+        for entry in taint_entries:
+            label = _escape_html(entry.get("label", ""))
+            anchor = entry.get("anchor", "")
+            graph_suffix = f' <span style="color: #7f8c8d;">[{taint_graph_links}]</span>' if taint_graph_links else ""
+            html += f'            <li style="margin: 6px 0;"><a href="dfg_paths.html#{anchor}">{label}</a>{extra_suffix}{graph_suffix}</li>\n'
+        html += """
+        </ul>
+        """
+    if implicit_entries:
+        html += """
+        <h4 style="margin-top: 12px;">Implicit flows <span style="color: #7f8c8d; font-weight: normal;">(CFG/PDG)</span></h4>
+        <ul style="list-style: none; padding-left: 0;">
+        """
+        for entry in implicit_entries:
+            label = _escape_html(entry.get("label", ""))
+            anchor = entry.get("anchor", "")
+            graph_suffix = f' <span style="color: #7f8c8d;">[{implicit_graph_links}]</span>' if implicit_graph_links else ""
+            html += f'            <li style="margin: 6px 0;"><a href="dfg_paths.html#{anchor}">{label}</a>{extra_suffix}{graph_suffix}</li>\n'
+        html += """
+        </ul>
+        """
+    html += """
+    </div>
+    """
+    return html
 
 
 def _get_css_styles() -> str:
@@ -1014,7 +1252,7 @@ def _generate_tainted_variables_section(tainted_vars: List[str], taint_assignmen
     </div>"""
 
 
-def _generate_advanced_analysis_section(implicit_flows, context_sensitive, path_sensitive, native_code, interprocedural, object_sensitive_enabled: bool = False, tai_e_meta: Optional[Dict[str, Any]] = None) -> str:
+def _generate_advanced_analysis_section(implicit_flows, context_sensitive, path_sensitive, native_code, interprocedural, object_sensitive_enabled: bool = False, tai_e_meta: Optional[Dict[str, Any]] = None, source_href: Optional[str] = None) -> str:
     """Generate Advanced Analysis section with heuristic signals"""
     
     implicit_count = implicit_flows.get('count', 0)
@@ -1026,6 +1264,9 @@ def _generate_advanced_analysis_section(implicit_flows, context_sensitive, path_
     branching_points = path_sensitive.get('branching_points', 0)
     feasible_paths = path_sensitive.get('feasible_paths', 0)
     infeasible_paths = path_sensitive.get('infeasible_paths', 0)
+    branching_details = path_sensitive.get('branching_details', []) if isinstance(path_sensitive, dict) else []
+    feasible_details = path_sensitive.get('feasible_details', []) if isinstance(path_sensitive, dict) else []
+    infeasible_details = path_sensitive.get('infeasible_details', []) if isinstance(path_sensitive, dict) else []
     
     native_methods = native_code.get('jni_methods', 0)
     native_transfers = native_code.get('taint_transfers', 0)
@@ -1167,6 +1408,62 @@ def _generate_advanced_analysis_section(implicit_flows, context_sensitive, path_
             </ul>
         </div>
 """
+    
+    path_details_available = bool(branching_details or feasible_details or infeasible_details)
+    if path_details_available:
+        source_link = f'<a href="{_escape_html(source_href)}">source</a>' if source_href else ""
+        link_parts = [source_link, '<a href="#graph-gallery">graphs</a>']
+        link_parts = [part for part in link_parts if part]
+        link_html = " | ".join(link_parts)
+        link_suffix = f' <span style="color: #b0b0b0;">({link_html})</span>' if link_html else ""
+
+        html += """
+        <div class="section">
+            <h3>🛤️ Path-Sensitive Details</h3>
+            <p>Branching lines are correlated with CFG/PDG nodes. Use the graph gallery to trace control-flow and reachability.</p>
+        """
+        if branching_details:
+            html += """
+            <h4 style="margin-top: 12px;">Branching points</h4>
+            <ul style="list-style: none; padding-left: 0;">
+            """
+            for detail in branching_details:
+                line = detail.get("line", "?")
+                branch_type = _escape_html(detail.get("type", "branch"))
+                condition = _escape_html(detail.get("condition", ""))
+                html += f'                <li style="margin: 6px 0;"><code>L{line}</code> {branch_type} <code>{condition}</code>{link_suffix}</li>\n'
+            html += """
+            </ul>
+            """
+        if feasible_details:
+            html += """
+            <h4 style="margin-top: 12px;">Feasible paths</h4>
+            <ul style="list-style: none; padding-left: 0;">
+            """
+            for detail in feasible_details:
+                line = detail.get("line", "?")
+                condition = _escape_html(detail.get("condition", ""))
+                reason = _escape_html(detail.get("reason", "heuristic"))
+                html += f'                <li style="margin: 6px 0;"><code>L{line}</code> <code>{condition}</code> <span style="color: #7f8c8d;">({reason})</span>{link_suffix}</li>\n'
+            html += """
+            </ul>
+            """
+        if infeasible_details:
+            html += """
+            <h4 style="margin-top: 12px;">Infeasible paths</h4>
+            <ul style="list-style: none; padding-left: 0;">
+            """
+            for detail in infeasible_details:
+                line = detail.get("line", "?")
+                condition = _escape_html(detail.get("condition", ""))
+                reason = _escape_html(detail.get("reason", "heuristic"))
+                html += f'                <li style="margin: 6px 0;"><code>L{line}</code> <code>{condition}</code> <span style="color: #7f8c8d;">({reason})</span>{link_suffix}</li>\n'
+            html += """
+            </ul>
+            """
+        html += """
+        </div>
+        """
     
     if loaded_libs:
         html += f"""
@@ -1527,6 +1824,38 @@ def _generate_findings_section(result: Dict[str, Any]) -> str:
                 total_flows += int(payload.get("flows", 0) or 0)
     joern_flow_display = str(total_flows) if flows_by_sink else "n/a"
     joern_flow_note = "reachableByFlows total" if flows_by_sink else "enable --joern-dataflow"
+
+    advanced_taint = result.get("advanced_taint", {})
+    if not isinstance(advanced_taint, dict):
+        advanced_taint = {}
+    taint_tracking = result.get("taint_tracking", {})
+    if not isinstance(taint_tracking, dict):
+        taint_tracking = {}
+
+    implicit_summary = advanced_taint.get("implicit_flows", {})
+    path_summary = advanced_taint.get("path_sensitive", {})
+    native_summary = advanced_taint.get("native_jni", {})
+    advanced_available = bool(advanced_taint)
+    if not advanced_available:
+        implicit_summary = taint_tracking.get("implicit_flows", {})
+        path_summary = taint_tracking.get("path_sensitive_analysis", {})
+        native_summary = taint_tracking.get("native_code_analysis", {})
+        advanced_available = any(
+            isinstance(payload, dict) and payload
+            for payload in (implicit_summary, path_summary, native_summary)
+        )
+
+    implicit_count = int(implicit_summary.get("count", 0) or 0) if isinstance(implicit_summary, dict) else 0
+    feasible_paths = int(path_summary.get("feasible_paths", 0) or 0) if isinstance(path_summary, dict) else 0
+    jni_methods = int(native_summary.get("jni_methods", 0) or 0) if isinstance(native_summary, dict) else 0
+    jni_transfers = int(native_summary.get("taint_transfers", 0) or 0) if isinstance(native_summary, dict) else 0
+
+    implicit_value = str(implicit_count) if advanced_available else "n/a"
+    path_value = str(feasible_paths) if advanced_available else "n/a"
+    jni_value = str(jni_transfers) if advanced_available else "n/a"
+    implicit_note = "count" if advanced_available else "enable --implicit-flows"
+    path_note = "feasible paths" if advanced_available else "enable --path-sensitive"
+    jni_note = f"methods: {jni_methods}" if advanced_available else "enable --native-jni"
     
     return f"""<div class="section">
         <h3 style="color: #2c3e50; font-size: 20px; margin-bottom: 15px;">📊 Findings</h3>
@@ -1547,6 +1876,26 @@ def _generate_findings_section(result: Dict[str, Any]) -> str:
                 <div class="metric-label">Joern Flows</div>
                 <div class="metric-value">{joern_flow_display}</div>
                 <div class="metric-description">{joern_flow_note}</div>
+            </div>
+        </div>
+        <div style="margin-top: 16px;">
+            <div class="metric-label" style="margin-bottom: 8px;">Advanced Taint Summary</div>
+            <div class="metrics-grid" style="grid-template-columns: repeat(3, 1fr);">
+                <div class="metric-card">
+                    <div class="metric-label">Implicit Flows</div>
+                    <div class="metric-value">{implicit_value}</div>
+                    <div class="metric-description">{implicit_note}</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">Path Feasible</div>
+                    <div class="metric-value">{path_value}</div>
+                    <div class="metric-description">{path_note}</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">JNI Transfers</div>
+                    <div class="metric-value">{jni_value}</div>
+                    <div class="metric-description">{jni_note}</div>
+                </div>
             </div>
         </div>
         {detected_badges}
@@ -1747,6 +2096,44 @@ def _generate_sink_gating_section(result: Dict[str, Any]) -> str:
         evidence_text = ", ".join(evidence_types) if evidence_types else "none"
         threshold_text = f"{threshold:.2f}" if isinstance(threshold, (int, float)) else "-"
 
+        breakdown_html = ""
+        details = decision.get("details") if isinstance(decision.get("details"), dict) else {}
+        breakdown = details.get("evidence_breakdown", []) if isinstance(details.get("evidence_breakdown"), list) else []
+        if breakdown:
+            breakdown_items = []
+            for entry in breakdown:
+                ev_type = _escape_html(entry.get("type", ""))
+                description = _escape_html(entry.get("description", ""))
+                confidence = entry.get("confidence")
+                weight = entry.get("weight")
+                weight_source = entry.get("weight_source", "")
+                line = entry.get("line")
+                context = _escape_html(entry.get("context", ""))
+                parts = [ev_type] if ev_type else []
+                if isinstance(weight, (int, float)):
+                    weight_text = f"w={weight:.2f}"
+                    if weight_source:
+                        weight_text += f" ({_escape_html(weight_source)})"
+                    parts.append(weight_text)
+                if isinstance(confidence, (int, float)):
+                    parts.append(f"c={confidence:.2f}")
+                if isinstance(line, int) and line > 0:
+                    parts.append(f"line {line}")
+                summary = " · ".join(parts)
+                if description:
+                    summary = f"{summary} — {description}" if summary else description
+                if context:
+                    summary += f" <span style=\"color: #7f8c8d;\">{context}</span>"
+                breakdown_items.append(f"<li style=\"margin: 4px 0;\">{summary}</li>")
+            breakdown_html = """
+            <details style="margin-top: 6px;">
+                <summary style="cursor: pointer; color: #3498db;">Evidence breakdown (weights + confidence)</summary>
+                <ul style="margin: 8px 0 0 16px; padding: 0;">
+                    {items}
+                </ul>
+            </details>
+            """.format(items="".join(breakdown_items))
+
         rows.append(f"""
         <tr>
             <td><code>{vuln}</code></td>
@@ -1754,7 +2141,7 @@ def _generate_sink_gating_section(result: Dict[str, Any]) -> str:
             <td>{confidence:.2f}</td>
             <td>{threshold_text}</td>
             <td style="color:{status_color}; font-weight:600;">{status}</td>
-            <td style="max-width: 420px; word-wrap: break-word;">{evidence_text}</td>
+            <td style="max-width: 420px; word-wrap: break-word;">{evidence_text}{breakdown_html}</td>
         </tr>
         """)
 
@@ -1790,7 +2177,8 @@ def _generate_file_links_section(result: Dict[str, Any], report_dir: Path) -> st
     if not input_file:
         return ""
     
-    filename = Path(input_file).name
+    input_path = Path(input_file).expanduser()
+    filename = input_path.name
     
     # Vulnerability status badge
     is_vulnerable = result.get('vulnerability_detected', False)
@@ -1818,11 +2206,18 @@ def _generate_file_links_section(result: Dict[str, Any], report_dir: Path) -> st
         links.append('<a href="#graph-gallery" style="color: #3498db; text-decoration: none; font-weight: 500;">DFG</a>')
     
     # Source link (file should be copied to report directory)
+    source_href = None
     source_file = report_dir / filename
     if source_file.exists() and source_file.suffix == '.java':
-        links.append(f'<a href="{filename}" style="color: #3498db; text-decoration: none; font-weight: 500;">source</a>')
+        source_href = filename
+    elif input_path.exists() and input_path.suffix == '.java':
+        try:
+            source_href = input_path.resolve().as_uri()
+        except Exception:
+            source_href = None
+    if source_href:
+        links.append(f'<a href="{_escape_html(source_href)}" style="color: #3498db; text-decoration: none; font-weight: 500;">source</a>')
     else:
-        # Fallback if source file wasn't copied
         links.append('<span style="color: #95a5a6; font-style: italic;">source</span>')
     
     links_html = ' | '.join(links) if links else ''
@@ -2236,6 +2631,95 @@ def _generate_all_artifacts_section(report_dir: Path) -> str:
         <h2 class="section-title">📦 All Artifacts</h2>
         <div class="artifacts-list">
             {''.join(artifacts)}
+        </div>
+    </div>"""
+
+
+def _generate_graph_index_section(report_dir: Path) -> str:
+    """Generate method-to-graph index for CFG/DFG/PDG files."""
+    graph_files = {"cfg": {}, "dfg": {}, "pdg": {}}
+    for prefix in graph_files:
+        for png_path in report_dir.glob(f"{prefix}_*.png"):
+            base = png_path.stem[len(prefix) + 1 :]
+            graph_files[prefix][base] = png_path.name
+
+    all_bases = set().union(*[set(items.keys()) for items in graph_files.values()])
+    if not all_bases:
+        return ""
+
+    index_by_base: Dict[str, Dict[str, Any]] = {}
+    index_path = report_dir / "graph_index.json"
+    if index_path.exists():
+        try:
+            payload = json.loads(index_path.read_text(encoding="utf-8"))
+            if isinstance(payload, list):
+                for entry in payload:
+                    if not isinstance(entry, dict):
+                        continue
+                    base = entry.get("base")
+                    if base:
+                        index_by_base[str(base)] = entry
+        except Exception:
+            index_by_base = {}
+
+    def sort_key(base: str) -> tuple:
+        match = re.match(r"^(\d+)_", base)
+        idx = int(match.group(1)) if match else 9999
+        method_label = re.sub(r"^\d+_", "", base)
+        return (idx, method_label)
+
+    rows = []
+    for base in sorted(all_bases, key=sort_key):
+        method_label = re.sub(r"^\d+_", "", base)
+        index_meta = index_by_base.get(base, {})
+        if index_meta.get("method"):
+            method_label = str(index_meta.get("method"))
+        start_line = index_meta.get("start_line")
+        end_line = index_meta.get("end_line")
+        if isinstance(start_line, int) and start_line > 0:
+            if isinstance(end_line, int) and end_line > 0 and end_line != start_line:
+                line_range = f"{start_line}–{end_line}"
+            else:
+                line_range = str(start_line)
+        else:
+            line_range = "—"
+        cfg = graph_files["cfg"].get(base)
+        dfg = graph_files["dfg"].get(base)
+        pdg = graph_files["pdg"].get(base)
+        cfg_link = f'<a href="{_escape_html(cfg)}">{_escape_html(cfg)}</a>' if cfg else "—"
+        dfg_link = f'<a href="{_escape_html(dfg)}">{_escape_html(dfg)}</a>' if dfg else "—"
+        pdg_link = f'<a href="{_escape_html(pdg)}">{_escape_html(pdg)}</a>' if pdg else "—"
+        rows.append(
+            f"<tr>"
+            f"<td><code>{_escape_html(method_label)}</code></td>"
+            f"<td>{_escape_html(line_range)}</td>"
+            f"<td>{cfg_link}</td>"
+            f"<td>{dfg_link}</td>"
+            f"<td>{pdg_link}</td>"
+            f"</tr>"
+        )
+
+    rows_html = "\n".join(rows)
+    return f"""<div class="section" id="graph-index">
+        <h3 style="color: #2c3e50; font-size: 20px; margin-bottom: 15px;">🧭 Graph Index (by method)</h3>
+        <p style="margin-bottom: 12px; color: #6c7a89;">
+            Graph filenames encode the method name (sanitized). Use this index to pick the exact CFG/DFG/PDG for a method.
+        </p>
+        <div style="overflow-x: auto;">
+            <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+                <thead>
+                    <tr style="background: #f5f7fa; text-align: left;">
+                        <th style="padding: 10px; border-bottom: 1px solid #e0e0e0;">Method</th>
+                        <th style="padding: 10px; border-bottom: 1px solid #e0e0e0;">Line range</th>
+                        <th style="padding: 10px; border-bottom: 1px solid #e0e0e0;">CFG</th>
+                        <th style="padding: 10px; border-bottom: 1px solid #e0e0e0;">DFG</th>
+                        <th style="padding: 10px; border-bottom: 1px solid #e0e0e0;">PDG</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows_html}
+                </tbody>
+            </table>
         </div>
     </div>"""
 

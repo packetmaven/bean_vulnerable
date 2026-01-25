@@ -893,6 +893,19 @@ def _write_dfg_paths_file(analysis_result: Dict[str, Any], report_dir: Path) -> 
             content += f"──────────────────────────────────────────────────────────────\n\n"
         
         content += "═══════════════════════════════════════════════════════════════\n"
+        # Append implicit flow summary when available
+        implicit_summary = taint_tracking.get("implicit_flows", {}) if isinstance(taint_tracking, dict) else {}
+        implicit_vars = implicit_summary.get("variables", {}) if isinstance(implicit_summary, dict) else {}
+        if implicit_vars:
+            content += "\n"
+            content += "═══════════════════════════════════════════════════════════════\n"
+            content += "  IMPLICIT FLOWS SUMMARY\n"
+            content += "═══════════════════════════════════════════════════════════════\n\n"
+            for idx, (target, controls) in enumerate(implicit_vars.items(), 1):
+                control_text = ", ".join(controls) if controls else "control-dependent"
+                content += f"IMPLICIT FLOW {idx}: {target} <- {control_text}\n"
+            content += "\n"
+        content += "═══════════════════════════════════════════════════════════════\n"
         content += f"Analysis completed. Total taint flows: {len(taint_flows)}\n"
         content += "═══════════════════════════════════════════════════════════════\n"
     
@@ -951,6 +964,8 @@ def main():
                     help="Temperature for calibrating GNN confidence (default: 1.0)")
     ap.add_argument("--gnn-ensemble", type=int, default=1,
                     help="Number of GNN checkpoints to use in ensemble (default: 1)")
+    ap.add_argument("--require-gnn", action="store_true",
+                    help="Fail the run unless Spatial GNN is fully initialized (requires torch/torch-geometric + --gnn-checkpoint)")
     ap.add_argument("--aeg-lite-java", action="store_true",
                     help="Run experimental AEG-Lite Java bytecode analyzer (ASM-based)")
     ap.add_argument("--aeg-java-home",
@@ -1117,6 +1132,14 @@ def main():
         tai_e_enable_taint=args.tai_e_taint,
         tai_e_taint_config=args.tai_e_taint_config,
     )
+
+    if args.require_gnn:
+        if not getattr(fw, "spatial_gnn_model", None):
+            LOG.error("❌ --require-gnn set, but Spatial GNN is not initialized. Install torch + torch-geometric and retry.")
+            sys.exit(2)
+        if not getattr(fw, "gnn_weights_loaded", False):
+            LOG.error("❌ --require-gnn set, but no GNN checkpoint is loaded. Provide --gnn-checkpoint.")
+            sys.exit(2)
     
     # Setup HTML report directory
     if args.html_report:
