@@ -10,11 +10,20 @@ A vulnerability analysis framework with experimental GNN modules; heuristic scor
 ## 📚 Table of Contents
 
 - [🎯 Overview](#-overview)
+- [⚡ Top-level Quickstart (TL;DR)](#-top-level-quickstart-tldr)
 - [🚀 Quick Start](#-quick-start)
+  - [Minimal Install (Fast Start)](#-minimal-install-fast-start)
+  - [Full Research Install (GNN + Joern + Tai-e)](#-full-research-install-gnn--joern--tai-e)
   - [Two CLI Options](#-two-cli-options)
   - [How / Why / When to use the CLI](#-how--why--when-to-use-the-cli)
   - [Decision Tree (pick the right CLI)](#-decision-tree-pick-the-right-cli)
   - [Quickstart (minimal copy/paste)](#-quickstart-minimal-copypaste)
+- [🧭 Scope and Threat Model](#-scope-and-threat-model)
+- [🛡️ Security and Responsible Use](#-security-and-responsible-use)
+- [🧩 Feature Maturity](#-feature-maturity)
+- [📚 Research Foundations](#-research-foundations)
+- [🧪 Reproducibility and Evaluation](#-reproducibility-and-evaluation)
+- [🔁 Common Workflows](#-common-workflows)
 - [📸 Example Outputs](#-example-outputs)
   - [Tainted Variables Detection](#tainted-variables-detection)
   - [Alias Analysis Results](#alias-analysis-results)
@@ -29,6 +38,9 @@ A vulnerability analysis framework with experimental GNN modules; heuristic scor
 - [🚨 Common Dependency Issues](#-common-dependency-issues)
 - [📦 Framework Installation](#-framework-installation)
 - [🔍 Understanding the Output](#-understanding-the-output)
+  - [Output Schema (JSON)](#output-schema-json)
+  - [HTML to JSON Mapping](#html-to-json-mapping)
+- [⚠️ Known Limitations](#-known-limitations)
 - [🎯 Interpreting Confidence Scores](#-interpreting-confidence-scores)
 - [🛡️ Security Practitioner Usage](#️-security-practitioner-usage)
 - [🧪 Testing and Validation](#-testing-and-validation)
@@ -56,35 +68,68 @@ The Bean Vulnerable framework combines the following cutting-edge technologies:
 - **Advanced Taint Tracking** with implicit flows and context sensitivity
 - **Alias Analysis** with heuristic field sensitivity + optional Tai-e object-sensitive pointer analysis
 
-### 🚀 **Quick Start**
+## ⚡ Top-level Quickstart (TL;DR)
 
 ```bash
-# 1. Use Python 3.11 (critical for DGL compatibility)
+# Fast scan + HTML report
+bean-vuln tests/samples/VUL001_SQLInjection_Basic.java --html-report output --summary
+
+# Deep audit (advanced taint + richer evidence)
+bean-vuln2 tests/samples/VUL001_SQLInjection_Basic.java --comprehensive --html-report output --summary
+```
+
+Notes:
+- Inputs are **Java-only** (`.java` files or directories containing `.java`).
+- `--html-report` requires **Joern** and **Graphviz** for graphs.
+- If the console scripts are not on PATH, use `./bean-vuln` and `./bean-vuln2`.
+
+## 🚀 Quick Start
+
+**Hard dependencies**
+- Python 3.11+
+- Java 11+ (required by Joern)
+- Joern 2.x (CPG + reachableByFlows)
+- Maven (build AEG-Lite)
+- Graphviz (PNG/SVG graphs in HTML report)
+
+**Optional dependencies**
+- PyTorch + DGL + torch-geometric (GNN inference)
+- Tai-e (object-sensitive alias/taint)
+- Trained GNN checkpoints (`--gnn-checkpoint`)
+
+### Minimal Install (Fast Start)
+
+```bash
 python3.11 -m venv venv_bean_311
 source venv_bean_311/bin/activate
 
-# 2. Install dependencies
+pip install --upgrade pip setuptools wheel
+pip install -e .
+
+python verify_installation.py
+bean-vuln tests/samples/VUL001_SQLInjection_Basic.java --summary
+```
+
+### Full Research Install (GNN + Joern + Tai-e)
+
+```bash
+python3.11 -m venv venv_bean_311
+source venv_bean_311/bin/activate
+
 pip install --upgrade pip setuptools wheel
 pip install torch==2.1.0 torchvision==0.16.0 torchaudio==2.1.0 --index-url https://download.pytorch.org/whl/cpu
 pip install torchdata==0.7.0
 pip install dgl==2.1.0 -f https://data.dgl.ai/wheels/torch-2.1/repo.html
+pip install -r requirements.txt
 pip install -e .
 
-# 3. Verify installation (Simple method - avoids shell quote issues)
 python verify_installation.py
-
-# Alternative single-line verification
-python -c "from src.core.integrated_gnn_framework import IntegratedGNNFramework; print('✅ Bean Vulnerable Framework ready!')"
-
-# 4. Test with sample file (generates HTML report with all graphs automatically)
 bean-vuln tests/samples/VUL001_SQLInjection_Basic.java --html-report output --summary
+```
 
-# If the console script is not on PATH, use the repo wrappers:
-./bean-vuln tests/samples/VUL001_SQLInjection_Basic.java --html-report output --summary
-./bean-vuln2 tests/samples/VUL001_SQLInjection_Basic.java --comprehensive --html-report output --summary
-# Repo wrappers auto-use venv_cli if it exists.
+Optional: install global CLI wrappers into `~/.local/bin`:
 
-# Optional: install global CLI wrappers into ~/.local/bin
+```bash
 ./scripts/install_cli.sh
 ```
 
@@ -138,7 +183,7 @@ bean-vuln tests/samples/VUL001_SQLInjection_Basic.java --html-report output --su
 bean-vuln2 tests/samples/VUL001_SQLInjection_Basic.java --comprehensive --html-report output --summary
 
 # 3) PoC + patch payloads (AEG-Lite Java)
-bean-vuln tests/samples/VUL006_XSS_ServletResponse.java --aeg-lite-java --aeg-lite-pocs --aeg-lite-patches --html-report output
+bean-vuln tests/samples/VUL006_XSS_ServletResponse.java --aeg-lite-java --aeg-lite-pocs --aeg-lite-patches --aeg-lite-enhanced-patches --html-report output
 ```
 
 **Expected Output:**
@@ -149,6 +194,85 @@ bean-vuln tests/samples/VUL006_XSS_ServletResponse.java --aeg-lite-java --aeg-li
 📝 Generating HTML report...
 ✅ HTML report generated: output/index.html
 🌐 Report opened in browser
+```
+
+## 🧭 Scope and Threat Model
+
+**Supported scope**
+- Java source input only (`.java` files or directories with Java sources).
+- Dataflow from untrusted input to security sinks (taint tracking + Joern CPG).
+- Common web and JVM sinks (SQL/command/path traversal/XSS/LDAP/XXE/EL/headers/reflection).
+
+**Out of scope / partial**
+- Non-Java languages or mixed-language builds.
+- Runtime configuration, deployment secrets, or live system state.
+- Full framework semantics (template engines, ORM, DI) beyond heuristic pattern checks.
+- Dynamic execution engines (hybrid dynamic, RL path prioritization, property testing are stubs).
+- `--sink-signature-preset` is recorded in reports but **does not change analysis** in this build.
+
+**Threat model**
+- Primary goal: identify **untrusted data reaching sensitive sinks**.
+- Intended for triage, audit, and guidance; not a replacement for runtime security controls.
+
+## 🛡️ Security and Responsible Use
+
+- Run only on code you own or are authorized to test.
+- Do not use the tool to exploit production systems.
+- PoCs are **synthetic** and meant for **controlled environments** only.
+- Treat datasets as potentially sensitive; redact secrets before sharing results.
+
+## 🧩 Feature Maturity
+
+| Component | Status | Notes |
+|---|---|---|
+| Heuristic detection + taint tracking | Stable | Core engine for `bean-vuln` |
+| Joern CPG + reachableByFlows | Stable | Requires Joern 2.x |
+| HTML reporting + graphs | Stable | Graphviz required |
+| AEG-Lite bytecode analysis | Experimental | Template-based PoCs/patches |
+| AEG-Lite enhanced scan/patches | Experimental | Source-level heuristics + templates |
+| Spatial GNN inference | Experimental | Requires trained weights |
+| Hybrid dynamic / RL / property testing | Stub | Interface only |
+
+## 📚 Research Foundations
+
+The implementation is inspired by and references:
+- **Joern CPG**: https://joern.io (CPG + dataflow queries)
+- **Devign (NeurIPS 2019)**: https://arxiv.org/abs/1909.03496 (graph-based vuln detection)
+- **IVDetect (ASE 2021)**: https://dl.acm.org/doi/10.1145/3468264.3468542
+- **LineVul (MSR 2022)**: https://arxiv.org/abs/2201.01919
+- **Tai-e**: https://github.com/pascal-lab/Tai-e (object-sensitive analysis)
+
+## 🧪 Reproducibility and Evaluation
+
+**Repro checklist**
+- Pin versions (Python 3.11, Java 11+, Joern 2.x).
+- Use consistent locale (`LANG/LC_ALL=en_US.UTF-8`).
+- Run from a clean working tree; avoid mixing generated artifacts.
+
+**Benchmark table**
+
+| Dataset | Metrics | Command | Expected range |
+|---|---|---|---|
+| `tests/samples` | `vulnerability_detected`, `taint_flows` | `bean-vuln tests/samples/VUL*.java --summary` | ≥1 finding per VUL* sample; taint flows >0 for taint sinks |
+| `tests/samples` (AEG-Lite) | `poc_count`, `patch_count` | `bean-vuln tests/samples/VUL006_XSS_ServletResponse.java --aeg-lite-java --aeg-lite-pocs --aeg-lite-patches --summary` | `poc_count ≥ 1`, `patch_count ≥ 1` |
+| OWASP Benchmark (optional) | precision/recall | `bean-vuln datasets/benchmarkjava/... --summary` | Compare vs `expectedresults-1.2.csv` |
+
+## 🔁 Common Workflows
+
+```bash
+# CI scan (fast)
+bean-vuln path/to/src --recursive --summary -o ci_report.json
+
+# Deep audit + HTML
+bean-vuln2 path/to/src --comprehensive --html-report output_audit --summary
+
+# PoC + patch generation (AEG-Lite)
+bean-vuln tests/samples/VUL006_XSS_ServletResponse.java \
+  --aeg-lite-java --aeg-lite-pocs --aeg-lite-patches --aeg-lite-enhanced-patches \
+  --html-report output_poc --summary
+
+# Regression sweep
+for file in tests/samples/VUL*.java; do bean-vuln "$file" --summary; done
 ```
 
 ## 📸 **Example Outputs**
@@ -588,7 +712,7 @@ Notes:
 - **Why:** Quick sanity check and demo script for onboarding or demos.
 - **How:** Compile/run the Java file or scan it with the CLI.
 - **When:** Use for presentations, walkthroughs, or regression sanity checks.
-- **Example (CLI):** `bean_vuln analysis/BeanVulnerableReferenceImplementation.java --summary`
+- **Example (CLI):** `bean-vuln analysis/BeanVulnerableReferenceImplementation.java --summary`
 
 ### **Comprehensive Test Suite**
 - **What:** CLI-backed regression suite for vulnerability detection + patch generation.
@@ -890,25 +1014,59 @@ pip install -e .
 
 ```json
 {
+  "input": "tests/samples/VUL001_SQLInjection_Basic.java",
   "vulnerability_detected": true,
-  "vulnerability_types": ["sql_injection", "command_injection", "xss"],
-  "confidence_scores": {
-    "traditional": 1.0000,
-    "bayesian": 0.9004,
-    "cescl": 0.4005,
-    "final_weighted": 0.7204
-  },
-  "uncertainty_level": "medium",
-  "cpg_metrics": {
+  "vulnerability_type": "sql_injection",
+  "confidence": 0.85,
+  "analysis_method": "pattern_heuristic_with_uncertainty",
+  "cpg": {
     "nodes": 133,
-    "edges": 27,
+    "edges": 725,
     "methods": 8,
-    "calls": 12,
-    "identifiers": 15
-  },
-  "analysis_time_seconds": 5.2
+    "calls": 12
+  }
 }
 ```
+
+### Output Schema (JSON)
+
+```json
+{
+  "input": "tests/samples/VUL007_LDAP_Injection.java",
+  "vulnerability_detected": true,
+  "vulnerability_type": "ldap_injection",
+  "confidence": 0.84,
+  "cpg": { "nodes": 177, "edges": 725, "methods": 10, "calls": 16 },
+  "taint_tracking": { "taint_flows_count": 4, "sanitizer_analysis": { } },
+  "joern_dataflow": { "flows_by_sink": { } },
+  "aeg_lite_java": { "success": true, "report": { "poc_count": 1, "patch_count": 1 } },
+  "analysis_config": { "sink_signature_preset": "graudit-java" }
+}
+```
+
+**Field guide**
+- `vulnerability_detected`, `vulnerability_type`, `confidence`: primary verdict.
+- `cpg`: CPG summary from Joern.
+- `taint_tracking`: tainted vars, sanitizer analysis, implicit/path/native stats.
+- `joern_dataflow`: reachableByFlows metrics (when enabled).
+- `aeg_lite_java`: PoCs and patches from the Java analyzer.
+- `analysis_config`: run metadata (e.g., requested sink preset).
+
+### HTML to JSON Mapping
+
+- **Findings** → `vulnerability_detected`, `vulnerability_type`, `confidence`
+- **Joern Flows** → `joern_dataflow.flows_by_sink`
+- **Advanced Taint Analysis** → `taint_tracking.*` (implicit/path/native/interprocedural)
+- **Sanitizer Analysis** → `taint_tracking.sanitizer_analysis`
+- **AEG-Lite Java (PoCs & Patches)** → `aeg_lite_java.report`
+
+## ⚠️ Known Limitations
+
+- Static analysis only; no runtime configuration or environment modeling.
+- `--sink-signature-preset` is **recorded but not applied** in this build.
+- GNN inference requires trained checkpoints; otherwise it is untrained.
+- Framework and template-engine support is heuristic, not exhaustive.
+- AEG-Lite patching is template-based and may not preserve complex semantics.
 
 ## 🎯 Interpreting Confidence Scores
 
