@@ -21,6 +21,8 @@ import asyncio
 logging.basicConfig(level=logging.INFO)
 LOG = logging.getLogger(__name__)
 
+from core.json_safety import safe_json_dump, safe_json_dumps
+
 # Import the framework
 try:
     from src.core.integrated_gnn_framework import IntegratedGNNFramework
@@ -536,12 +538,12 @@ def main():
         output_path.parent.mkdir(parents=True, exist_ok=True)
         
         with output_path.open('w', encoding='utf-8') as f:
-            json.dump(output_data, f, indent=2, default=str)
+            safe_json_dump(output_data, f, indent=2)
         
         print(f"📄 Results saved to: {output_path}")
     else:
         print("📄 JSON Results:")
-        print(json.dumps(output_data, indent=2, default=str))
+        print(safe_json_dumps(output_data, indent=2))
 
 if __name__ == "__main__":
     main()

@@ -542,6 +542,26 @@ Replace `X.Y.Z` below with the torch version printed above.
 /Users/<your-username>/src/github.com/your-org/bean_vulnerable_gnn_repo/fresh_bean_test_env/bin/python -m pip install --no-cache-dir torch-geometric
 ```
 
+### Train the Spatial GNN (copy/paste)
+```bash
+# --- install project + GNN deps ---
+python -m pip install -e ".[gnn]"
+
+# --- verify deps ---
+python -c "import torch, torch_geometric; print('torch', torch.__version__, 'pyg', torch_geometric.__version__)"
+
+# --- prepare training data (uses Joern; requires `joern` on PATH and Java 11+) ---
+rm -rf training_data
+python prepare_training_data.py --input tests/samples --output training_data --train-split 0.7 --val-split 0.15 --test-split 0.15
+
+# --- train + save checkpoints ---
+rm -rf models/spatial_gnn
+python train_model.py --data training_data --output models/spatial_gnn --epochs 100 --batch-size 32 --lr 0.001 --device auto
+
+# --- your checkpoint to use with the CLI ---
+ls -lah models/spatial_gnn/best_model.pt
+```
+
 ### Quick verification
 ```bash
 /Users/<your-username>/src/github.com/your-org/bean_vulnerable_gnn_repo/fresh_bean_test_env/bin/python -c 'import torch, torchdata, dgl; print("OK", torch.__version__, torchdata.__version__, dgl.__version__)'

@@ -1450,52 +1450,52 @@ class IntegratedGNNFramework:
         if self.enable_spatial_gnn:
             try:
                 from .spatial_gnn_enhanced import create_spatial_gnn_model, TORCH_GEOMETRIC_AVAILABLE
-                if TORCH_GEOMETRIC_AVAILABLE:
-                    # Create model with research-grade configuration
-                    gnn_config = {
-                        'hidden_dim': 512,
-                        'num_layers': 4,
-                        'num_attention_heads': 8,
-                        'use_codebert': True,  # CodeBERT embeddings required for this pipeline
-                        'use_hierarchical_pooling': True,
-                        'enable_attention_visualization': True,
-                        'enable_counterfactual_analysis': True
-                    }
-                    checkpoint_paths = list(self.gnn_checkpoint_paths)
-                    if checkpoint_paths and self.gnn_ensemble > 0:
-                        if len(checkpoint_paths) > self.gnn_ensemble:
-                            self.logger.warning(
-                                f"⚠️ {len(checkpoint_paths)} checkpoints provided; limiting to {self.gnn_ensemble}."
-                            )
-                            checkpoint_paths = checkpoint_paths[: self.gnn_ensemble]
-                        elif len(checkpoint_paths) < self.gnn_ensemble:
-                            self.logger.warning(
-                                f"⚠️ gnn_ensemble={self.gnn_ensemble} but only {len(checkpoint_paths)} checkpoints provided."
-                            )
+                if not TORCH_GEOMETRIC_AVAILABLE:
+                    raise RuntimeError("PyTorch Geometric unavailable; cannot run Spatial GNN.")
 
-                    if checkpoint_paths:
-                        for checkpoint_path in checkpoint_paths:
-                            model = create_spatial_gnn_model(gnn_config)
-                            if self._load_spatial_gnn_checkpoint(checkpoint_path, model=model):
-                                self.spatial_gnn_models.append(model)
-                        if not self.spatial_gnn_models:
-                            self.logger.warning("⚠️ No Spatial GNN checkpoints loaded; disabling inference.")
-                        else:
-                            self.spatial_gnn_model = self.spatial_gnn_models[0]
-                            self.gnn_weights_loaded = True
-                            self.gnn_weights_loaded_count = len(self.spatial_gnn_models)
-                            self.logger.info(
-                                f"✅ Next-Generation Spatial GNN initialized with {self.gnn_weights_loaded_count} checkpoint(s)"
-                            )
-                    else:
-                        self.spatial_gnn_model = create_spatial_gnn_model(gnn_config)
-                        self.spatial_gnn_models = [self.spatial_gnn_model]
-                        self.logger.info("✅ Next-Generation Spatial GNN initialized (research config; inference enabled)")
+                # Create model with research-grade configuration.
+                gnn_config = {
+                    'hidden_dim': 512,
+                    'num_layers': 4,
+                    'num_attention_heads': 8,
+                    'use_codebert': True,
+                    'use_hierarchical_pooling': True,
+                    'enable_attention_visualization': True,
+                    'enable_counterfactual_analysis': True
+                }
+
+                checkpoint_paths = list(self.gnn_checkpoint_paths)
+                if checkpoint_paths and self.gnn_ensemble > 0:
+                    if len(checkpoint_paths) > self.gnn_ensemble:
+                        self.logger.warning(
+                            f"⚠️ {len(checkpoint_paths)} checkpoints provided; limiting to {self.gnn_ensemble}."
+                        )
+                        checkpoint_paths = checkpoint_paths[: self.gnn_ensemble]
+                    elif len(checkpoint_paths) < self.gnn_ensemble:
+                        self.logger.warning(
+                            f"⚠️ gnn_ensemble={self.gnn_ensemble} but only {len(checkpoint_paths)} checkpoints provided."
+                        )
+
+                if checkpoint_paths:
+                    for checkpoint_path in checkpoint_paths:
+                        model = create_spatial_gnn_model(gnn_config)
+                        if self._load_spatial_gnn_checkpoint(checkpoint_path, model=model):
+                            self.spatial_gnn_models.append(model)
+                    if not self.spatial_gnn_models:
+                        raise RuntimeError("No Spatial GNN checkpoints loaded; cannot run GNN inference.")
+                    self.spatial_gnn_model = self.spatial_gnn_models[0]
+                    self.gnn_weights_loaded = True
+                    self.gnn_weights_loaded_count = len(self.spatial_gnn_models)
+                    self.logger.info(
+                        f"✅ Next-Generation Spatial GNN initialized with {self.gnn_weights_loaded_count} checkpoint(s)"
+                    )
                 else:
-                    self.logger.warning("⚠️ PyTorch Geometric not available - Spatial GNN disabled")
+                    self.spatial_gnn_model = create_spatial_gnn_model(gnn_config)
+                    self.spatial_gnn_models = [self.spatial_gnn_model]
+                    self.logger.info("✅ Next-Generation Spatial GNN initialized (inference enabled)")
             except Exception as e:
-                self.logger.warning(f"⚠️ Spatial GNN initialization failed: {e}")
-                self.spatial_gnn_model = None
+                # No fallbacks: if the user enabled Spatial GNN, treat failures as fatal.
+                raise RuntimeError(f"Spatial GNN initialization failed: {e}") from e
 
         self._enable_gnn_forward_trace()
         

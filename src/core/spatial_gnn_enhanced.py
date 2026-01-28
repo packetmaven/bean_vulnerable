@@ -53,13 +53,12 @@ try:
     from torch_geometric.nn.inits import glorot, zeros
     TORCH_GEOMETRIC_AVAILABLE = True
     logger.info(" PyTorch Geometric available - spatial GNN enabled (experimental)")
-except ImportError:
+except ImportError as exc:
     TORCH_GEOMETRIC_AVAILABLE = False
-    logger.warning(" PyTorch Geometric not available - spatial GNN disabled")
-    # Create dummy classes for fallback
-    class MessagePassing: pass
-    class nn: 
-        class Module: pass
+    raise ImportError(
+        "PyTorch Geometric (torch_geometric) is required for the Spatial GNN. "
+        "Install it (and its dependencies) to enable GNN inference."
+    ) from exc
 
 # Check for transformers integration
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
@@ -1515,6 +1514,7 @@ class CounterfactualAnalyzer(nn.Module):
             'robustness_score': robustness_score
         }
 
+
 # 
 # 7. Enhanced Factory Functions and Utilities
 # 
@@ -1544,7 +1544,7 @@ def create_nextgen_spatial_gnn_model(config: Optional[Dict[str, Any]] = None) ->
         logger.warning(" Transformers not available; disabling CodeBERT embeddings.")
         gnn_config.use_codebert = False
 
-    # Create model
+    # Create model (PyG required)
     model = NextGenSpatialGNNVulnerabilityDetector(gnn_config)
     
     logger.info(" Next-Generation Spatial GNN model created successfully")

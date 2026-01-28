@@ -51,6 +51,73 @@ EDGE_STYLE_MAP = {
 }
 
 
+# ============================================================================
+# JSON Serialization Helpers - Circular Reference Handling
+# ============================================================================
+
+def sanitize_for_json(obj, seen=None, depth=0, max_depth=50):
+    """
+    Recursively sanitize objects for JSON encoding, breaking circular references.
+
+    This function handles the case where framework integration objects
+    (Joern CPG, Tai-e analysis, VUL4J parser, AEG-Lite bytecode analysis)
+    contain bidirectional references that would normally cause:
+        ValueError: Circular reference detected
+    """
+    if seen is None:
+        seen = set()
+
+    obj_id = id(obj)
+    if obj_id in seen:
+        return "[circular_reference]"
+    if depth > max_depth:
+        return "[max_depth_exceeded]"
+
+    if obj is None or isinstance(obj, (bool, int, float, str)):
+        return obj
+
+    if isinstance(obj, list):
+        seen.add(obj_id)
+        try:
+            return [sanitize_for_json(item, seen, depth + 1, max_depth) for item in obj]
+        finally:
+            seen.discard(obj_id)
+
+    if isinstance(obj, dict):
+        seen.add(obj_id)
+        try:
+            return {
+                k: sanitize_for_json(v, seen, depth + 1, max_depth)
+                for k, v in obj.items()
+                if isinstance(k, str)
+            }
+        finally:
+            seen.discard(obj_id)
+
+    if hasattr(obj, "__dict__") and not isinstance(obj, (type, type(lambda: None))):
+        seen.add(obj_id)
+        try:
+            return {
+                k: sanitize_for_json(v, seen, depth + 1, max_depth)
+                for k, v in obj.__dict__.items()
+                if isinstance(k, str) and not k.startswith("_")
+            }
+        finally:
+            seen.discard(obj_id)
+
+    return str(obj)
+
+
+def safe_json_dumps(obj, indent=2, **kwargs):
+    """Safely serialize objects to JSON by breaking circular references."""
+    sanitized = sanitize_for_json(obj)
+    return json.dumps(sanitized, indent=indent, **kwargs)
+
+# ============================================================================
+# End JSON Serialization Helpers
+# ============================================================================
+
+
 def _resolve_tai_e_jar(candidate: Optional[str]) -> Optional[Path]:
     if not candidate:
         return None
@@ -1090,9 +1157,19 @@ def main():
             LOG.warning("Tai-e taint enabled but no config found; skipping taint analysis.")
             args.tai_e_taint = False
     _maybe_prompt_tai_e_home(args)
-    if not args.spatial_gnn:
-        LOG.warning("⚠️ Ignoring --no-spatial-gnn; spatial GNN is always enabled.")
-        args.spatial_gnn = True
+
+    # Spatial GNN dependency gate (no fallback when enabled)
+    if args.spatial_gnn:
+        try:
+            import torch  # noqa: F401
+            import torch_geometric  # noqa: F401
+        except Exception as exc:
+            LOG.error(
+                "❌ Spatial GNN is enabled, but required dependencies are missing.\n"
+                "Install with: pip install -e \".[gnn]\"\n"
+                f"Root cause: {exc}"
+            )
+            sys.exit(2)
     
     # Handle --comprehensive flag
     if args.comprehensive:
@@ -1330,12 +1407,12 @@ def main():
         output_path.parent.mkdir(parents=True, exist_ok=True)
         
         with output_path.open('w', encoding='utf-8') as f:
-            json.dump(output_data, f, indent=2, default=str)
+            f.write(safe_json_dumps(output_data, indent=2))
         
         print(f"📄 Results saved to: {output_path}")
     else:
         print("📄 JSON Results:")
-        print(json.dumps(output_data, indent=2, default=str))
+        print(safe_json_dumps(output_data, indent=2))
 
 
 if __name__ == "__main__":

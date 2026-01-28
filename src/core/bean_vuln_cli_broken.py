@@ -24,6 +24,8 @@ import webbrowser
 logging.basicConfig(level=logging.INFO)
 LOG = logging.getLogger(__name__)
 
+from core.json_safety import safe_json_dump, safe_json_dumps
+
 # Import the framework
 try:
     from src.core.integrated_gnn_framework import IntegratedGNNFramework
@@ -518,11 +520,11 @@ def main():
         
         if not p.exists():
             print(f"❌ Input {i}: {p} not found")
-                continue
+            continue
             
         print(f"🔍 Input {i}: {p}")
-                
-                # Analyze with enhanced edge extraction
+
+        # Analyze with enhanced edge extraction
         result = analyze_path(p, args.recursive, args.keep_workdir, export_dir)
         
         # Export graphs if requested
@@ -580,27 +582,27 @@ def main():
                 LOG.error(f"Failed to export graphs: {e}")
         
         # Extract metrics for summary
-            cpg_data = result.get('cpg', {})
+        cpg_data = result.get('cpg', {})
         node_count = cpg_data.get('nodes', 0)
         edge_count = cpg_data.get('edges', 0)  # FIXED: This should now show real edge count
-            confidence = result.get('confidence', 0.0)
-            vulnerable = result.get('vulnerability_detected', False)
-            # Default to True unless explicitly False to reflect local GNN usage
-            gnn_used = bool(result.get('gnn_utilized', True))
+        confidence = result.get('confidence', 0.0)
+        vulnerable = result.get('vulnerability_detected', False)
+        # Default to True unless explicitly False to reflect local GNN usage
+        gnn_used = bool(result.get('gnn_utilized', True))
             
-            if args.summary:
-                vuln_status = "🚨" if vulnerable else "✅"
-                gnn_status = "🧠" if gnn_used else "📊"
-                print(f"   {vuln_status} Nodes: {node_count}, Edges: {edge_count}, "
-                      f"Confidence: {confidence:.3f}, Vulnerable: {vulnerable}, GNN: {gnn_used}")
+        if args.summary:
+            vuln_status = "🚨" if vulnerable else "✅"
+            gnn_status = "🧠" if gnn_used else "📊"
+            print(f"   {vuln_status} Nodes: {node_count}, Edges: {edge_count}, "
+                  f"Confidence: {confidence:.3f}, Vulnerable: {vulnerable}, GNN: {gnn_used}")
             
-            # Add metadata
-            result.update({
-                'input': str(p),
-                'input_type': 'file' if p.is_file() else 'directory'
-            })
+        # Add metadata
+        result.update({
+            'input': str(p),
+            'input_type': 'file' if p.is_file() else 'directory'
+        })
             
-            results.append(result)
+        results.append(result)
     
     total_time = time.time() - start_time
     
@@ -640,12 +642,12 @@ def main():
         output_path.parent.mkdir(parents=True, exist_ok=True)
         
         with output_path.open('w', encoding='utf-8') as f:
-            json.dump(output_data, f, indent=2, default=str)
+            safe_json_dump(output_data, f, indent=2)
         
         print(f"📄 Results saved to: {output_path}")
     else:
         print("📄 JSON Results:")
-            print(json.dumps(output_data, indent=2, default=str))
+        print(safe_json_dumps(output_data, indent=2))
 
 if __name__ == "__main__":
     main()

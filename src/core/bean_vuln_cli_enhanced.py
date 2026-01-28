@@ -46,6 +46,7 @@ from core.taint_debugging.interactive_cli import launch_debugger_from_result
 from core.precision_debugging.diagnosis import analyze_source
 from core.performance.profiling_harness import ProfilingConfiguration, MultiLayerProfiler
 from core.performance.object_profiler import ObjectCentricProfiler
+from core.json_safety import safe_json_dump, safe_json_dumps
 
 try:
     from extensions.aeg_java_bridge import run_aeg_lite_java
@@ -1692,11 +1693,11 @@ def main():
         }
         
         with output_path.open('w', encoding='utf-8') as f:
-            json.dump(enhanced_output, f, indent=2, default=str)
+            safe_json_dump(enhanced_output, f, indent=2)
         print(f"📄 Enhanced results saved to: {output_path}")
     elif not args.html_report:  # Only print JSON if no HTML report
         print("📄 Enhanced JSON Results:")
-        print(json.dumps({'results': results}, indent=2, default=str))
+        print(safe_json_dumps({'results': results}, indent=2))
 
 if __name__ == "__main__":
     main()
