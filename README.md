@@ -562,6 +562,20 @@ python train_model.py --data training_data --output models/spatial_gnn --epochs 
 ls -lah models/spatial_gnn/best_model.pt
 ```
 
+### Train the Spatial GNN (better defaults / less unstable)
+If you see very few batches (e.g. `0/1 ... 1/1`), training is usually noisy. Prefer a smaller batch size and lower learning rate:
+
+```bash
+# More stable training defaults (especially for small datasets)
+python train_model.py --data training_data --output models/spatial_gnn --epochs 200 --batch-size 8 --lr 0.0003 --device auto
+```
+
+If you’re on Apple Silicon, you can force MPS:
+
+```bash
+python train_model.py --data training_data --output models/spatial_gnn --epochs 200 --batch-size 16 --lr 0.0003 --device mps
+```
+
 ### Quick verification
 ```bash
 /Users/<your-username>/src/github.com/your-org/bean_vulnerable_gnn_repo/fresh_bean_test_env/bin/python -c 'import torch, torchdata, dgl; print("OK", torch.__version__, torchdata.__version__, dgl.__version__)'
