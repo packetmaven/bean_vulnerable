@@ -664,15 +664,20 @@ python -m src.core.prototype_extractor --checkpoint models/spatial_gnn/best_mode
 If you see very few batches (e.g. `0/1 ... 1/1`), training is usually noisy. Prefer a smaller batch size and lower learning rate:
 
 ```bash
+# Pick dataset dir (same as above)
+DATA_DIR="training_data/vul4j"   # or: training_data/samples
+
 # More stable training defaults (especially for small datasets)
-python train_model.py --data training_data --output models/spatial_gnn --epochs 200 --batch-size 8 --lr 0.0003 --device auto
+python train_model.py --data "$DATA_DIR" --output models/spatial_gnn --epochs 200 --batch-size 8 --lr 0.0003 --device auto
 ```
 
 If you’re on Apple Silicon, you can force MPS:
 
 ```bash
-python train_model.py --data training_data --output models/spatial_gnn --epochs 200 --batch-size 16 --lr 0.0003 --device mps
+python train_model.py --data "$DATA_DIR" --output models/spatial_gnn --epochs 200 --batch-size 16 --lr 0.0003 --device mps
 ```
+
+**Apple Silicon / MPS memory note:** `src/core/spatial_gnn_enhanced.py` uses a memory-safe attention path (avoids quadratic attention over edge lists) and runs the transformer **per-graph** when `batch` is provided. If you still hit OOM, reduce `--batch-size` first.
 
 ### Quick verification
 ```bash
@@ -2127,7 +2132,16 @@ We welcome contributions! Whether you're fixing bugs, adding features, improving
 3. Make your changes following our coding standards
 4. Add tests for new functionality
 5. Run tests: `pytest tests/`
-6. Submit a pull request
+6. Commit + push your branch:
+
+```bash
+git status
+git add <changed files>
+git commit -m "Fix: <short description>"
+git push -u origin HEAD
+```
+
+7. Submit a pull request
 
 **Areas we need help with:**
 - 🐛 Bug fixes and performance improvements
@@ -2157,4 +2171,4 @@ For issues or questions:
 
 ---
 
-**License:** MIT | **Version:** 2.0 | **Last Updated:** October 2025
+**License:** MIT | **Version:** 2.0 | **Last Updated:** February 2026

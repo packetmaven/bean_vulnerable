@@ -49,7 +49,7 @@ try:
         MessagePassing, aggr
     )
     from torch_geometric.data import Data, HeteroData, Batch
-    from torch_geometric.utils import to_undirected, add_self_loops, degree
+    from torch_geometric.utils import to_undirected, add_self_loops, degree, to_dense_batch
     from torch_geometric.nn.inits import glorot, zeros
     TORCH_GEOMETRIC_AVAILABLE = True
     logger.info(" PyTorch Geometric available - spatial GNN enabled (experimental)")
@@ -320,8 +320,15 @@ class EnhancedRelationalGCN(nn.Module):
         # Initialize relation weights
         nn.init.ones_(self.relation_weights)
     
-    def forward(self, x: torch.Tensor, edge_index: torch.Tensor, 
-                edge_type: torch.Tensor, edge_attr: Optional[torch.Tensor] = None):
+    def forward(
+        self,
+        x: torch.Tensor,
+        edge_index: torch.Tensor,
+        edge_type: torch.Tensor,
+        edge_attr: Optional[torch.Tensor] = None,
+        *,
+        collect_attention: bool = False,
+    ):
         """
         Enhanced forward pass with multi-relational processing and attention
         
@@ -361,36 +368,45 @@ class EnhancedRelationalGCN(nn.Module):
             else:
                 x_r = self.type_transforms[r](x)
             
-            # Apply attention mechanism for this relation type
+            # Apply relation-specific edge attention.
+            #
+            # IMPORTANT: We deliberately avoid PyTorch MultiheadAttention here.
+            # The previous implementation applied full attention over the *edge list*
+            # (sequence length = num_edges_r), which creates O(E^2) attention matrices
+            # and can OOM quickly on realistic CPGs (especially on MPS).
             if edge_index_r.numel() > 0:
-                # Create attention input from source and target nodes
                 row, col = edge_index_r
-                source_nodes = x_r[row]  # [num_edges_r, out_channels]
-                target_nodes = x_r[col]  # [num_edges_r, out_channels]
-                
-                # Apply multi-head attention
-                if source_nodes.size(0) > 0:
-                    # Reshape for batch processing
-                    source_batch = source_nodes.unsqueeze(0)  # [1, num_edges_r, out_channels]
-                    target_batch = target_nodes.unsqueeze(0)  # [1, num_edges_r, out_channels]
-                    
-                    attended_output, attention_scores = self.relation_attention[r](
-                        source_batch, target_batch, target_batch
-                    )
-                    
-                    # Store attention weights for interpretability
-                    attention_weights[f'relation_{r}'] = attention_scores.squeeze(0)
-                    
-                    # Aggregate attended features to target nodes
-                    attended_features = attended_output.squeeze(0)  # [num_edges_r, out_channels]
-                    
-                    # Scatter to target nodes
-                    relation_out = torch.zeros_like(out)
-                    relation_out.index_add_(0, col, attended_features)
-                    
-                    # Weight by relation importance
-                    relation_out = relation_out * torch.sigmoid(self.relation_weights[r])
-                    relation_outputs.append(relation_out)
+                if row.numel() == 0:
+                    continue
+
+                # Gather per-edge source/target embeddings
+                source_nodes = x_r[row]  # [E_r, out_channels]
+                target_nodes = x_r[col]  # [E_r, out_channels]
+
+                # Compute a lightweight, per-edge attention gate in O(E_r).
+                # (Dot-product similarity -> sigmoid gate)
+                scale = math.sqrt(float(self.out_channels)) if self.out_channels > 0 else 1.0
+                attn_logits = (source_nodes * target_nodes).sum(dim=-1) / scale  # [E_r]
+                attn = torch.sigmoid(attn_logits)  # [E_r] in (0, 1)
+
+                # Message passing: weighted source -> target accumulation
+                messages = source_nodes * attn.unsqueeze(-1)  # [E_r, out_channels]
+                relation_out = torch.zeros_like(out)
+                relation_out.index_add_(0, col, messages)
+
+                # Degree normalization (prevents relation_out magnitude exploding with in-degree)
+                deg = torch.zeros((x.size(0),), device=x.device, dtype=relation_out.dtype)
+                deg.index_add_(0, col, torch.ones_like(attn, dtype=deg.dtype))
+                deg = deg.clamp_min(1.0)
+                relation_out = relation_out / deg.unsqueeze(-1)
+
+                # Store attention weights for interpretability only when requested
+                if collect_attention:
+                    attention_weights[f"relation_{r}"] = attn.detach()
+
+                # Weight by relation importance
+                relation_out = relation_out * torch.sigmoid(self.relation_weights[r])
+                relation_outputs.append(relation_out)
         
         # Combine relation-specific outputs
         if relation_outputs:
@@ -491,31 +507,21 @@ class InterProceduralAbstractGraph(nn.Module):
         
         # Create call sequences
         row, col = call_edges
-        call_sequences = []
-        
-        # Group by call chains
+
+        # Group by call chains.
+        # NOTE: Outgoing degree varies, so sequences have variable length.
+        # Process each sequence independently (no torch.cat over ragged sequences).
         unique_sources = row.unique()
         for source in unique_sources:
             targets = col[row == source]
-            if targets.numel() > 1:
-                # Create sequence from source through targets
-                sequence_features = torch.cat([x[source:source+1], x[targets]], dim=0)
-                call_sequences.append(sequence_features.unsqueeze(0))
-        
-        if call_sequences:
-            # Process call sequences with GRU
-            sequences = torch.cat(call_sequences, dim=0)  # [num_sequences, seq_len, node_dim]
-            encoded_sequences, _ = self.call_graph_encoder(sequences)
-            
-            # Update original node features with encoded call information
-            seq_idx = 0
-            for source in unique_sources:
-                targets = col[row == source]
-                if targets.numel() > 1:
-                    # Update with encoded features
-                    encoded_call_features = encoded_sequences[seq_idx, -1, :]  # Last hidden state
-                    x[source] = x[source] + encoded_call_features[:self.node_dim]
-                    seq_idx += 1
+            if targets.numel() <= 1:
+                continue
+
+            # Sequence: source -> all callees (order is arbitrary but stable for the batch)
+            seq = torch.cat([x[source : source + 1], x[targets]], dim=0).unsqueeze(0)  # [1, L, node_dim]
+            encoded_seq, _ = self.call_graph_encoder(seq)
+            encoded_call_features = encoded_seq[0, -1, :]  # [hidden_dim]
+            x[source] = x[source] + encoded_call_features[: self.node_dim]
         
         return x
     
@@ -692,7 +698,7 @@ class AdaptiveTransformerGNNFusion(nn.Module):
         # Positional encoding for transformer
         self.positional_encoding = PositionalEncoding(hidden_dim, max_len=1000)
         
-        logger.info(f" Adaptive Transformer-GNN Fusion initialized")
+        logger.info(" Adaptive Transformer-GNN Fusion initialized")
         logger.info(f"   - Transformer layers: {num_transformer_layers}")
         logger.info(f"   - GNN layers: {num_gnn_layers}")
         logger.info(f"   - CodeBERT integration: {use_codebert and self.codebert_model is not None}")
@@ -730,22 +736,46 @@ class AdaptiveTransformerGNNFusion(nn.Module):
             logger.warning(f"CodeBERT embedding failed: {e}")
             return torch.randn(len(node_tokens), self.hidden_dim)
     
-    def transformer_forward(self, x: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, Dict]:
+    def transformer_forward(
+        self,
+        x: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        *,
+        batch: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, Dict]:
         """Apply transformer layers for global context"""
-        
-        # Add positional encoding
-        x = x.unsqueeze(0)  # Add batch dimension [1, num_nodes, hidden_dim]
-        x = self.positional_encoding(x)
-        
-        # Apply transformer layers
+
+        # If we have a PyG `batch` vector, run transformer *per-graph* using padding.
+        # This prevents OOM from treating a whole mini-batch as one giant sequence.
+        if batch is not None:
+            # [B, L, H], mask: [B, L] where True means valid node
+            dense_x, mask = to_dense_batch(x, batch)
+            dense_x = self.positional_encoding(dense_x)
+
+            # src_key_padding_mask expects True for padding positions
+            pad_mask = ~mask
+            if attention_mask is not None:
+                # If a user-supplied mask is provided, combine it (logical OR).
+                # (Both masks must be [B, L] with True meaning "ignore".)
+                pad_mask = pad_mask | attention_mask
+
+            attention_weights: Dict[str, Any] = {}
+            for i, layer in enumerate(self.transformer_layers):
+                dense_x = layer(dense_x, src_key_padding_mask=pad_mask)
+
+            # Restore [N, H] in the original (batch-grouped) node order
+            out = dense_x[mask]
+            return out, attention_weights
+
+        # Single-graph path (no PyG batch vector)
+        x_b = x.unsqueeze(0)  # [1, num_nodes, hidden_dim]
+        x_b = self.positional_encoding(x_b)
+
         attention_weights = {}
         for i, layer in enumerate(self.transformer_layers):
-            x = layer(x, src_key_padding_mask=attention_mask)
-            # Note: Attention weights extraction would require custom layer implementation
-            
-        x = x.squeeze(0)  # Remove batch dimension [num_nodes, hidden_dim]
-        
-        return x, attention_weights
+            x_b = layer(x_b, src_key_padding_mask=attention_mask)
+
+        return x_b.squeeze(0), attention_weights
     
     def gnn_forward(self, x: torch.Tensor, edge_index: torch.Tensor) -> Tuple[torch.Tensor, Dict]:
         """Apply GNN layers for local structure"""
@@ -770,8 +800,14 @@ class AdaptiveTransformerGNNFusion(nn.Module):
         
         return x, gnn_attention_weights
     
-    def forward(self, x: torch.Tensor, edge_index: torch.Tensor, 
-                node_tokens: Optional[List[str]] = None) -> Dict[str, torch.Tensor]:
+    def forward(
+        self,
+        x: torch.Tensor,
+        edge_index: torch.Tensor,
+        node_tokens: Optional[List[str]] = None,
+        *,
+        batch: Optional[torch.Tensor] = None,
+    ) -> Dict[str, torch.Tensor]:
         """
         Adaptive fusion of transformer and GNN representations
         
@@ -795,7 +831,7 @@ class AdaptiveTransformerGNNFusion(nn.Module):
         x = x + centrality_features
         
         # Global context with Transformer
-        transformer_features, transformer_attention = self.transformer_forward(x)
+        transformer_features, transformer_attention = self.transformer_forward(x, batch=batch)
         
         # Local structure with GNN
         gnn_features, gnn_attention = self.gnn_forward(x, edge_index)
@@ -1354,7 +1390,12 @@ class NextGenSpatialGNNVulnerabilityDetector(nn.Module):
         # Stage 2: Enhanced Multi-Relational Processing
         h = x
         for i, rgcn_layer in enumerate(self.relational_layers):
-            h_new, attention_weights = rgcn_layer(h, processed_edge_index, edge_type)
+            h_new, attention_weights = rgcn_layer(
+                h,
+                processed_edge_index,
+                edge_type,
+                collect_attention=bool(return_attention),
+            )
             
             # Store attention weights
             all_attention_weights[f'rgcn_layer_{i}'] = attention_weights
@@ -1373,7 +1414,12 @@ class NextGenSpatialGNNVulnerabilityDetector(nn.Module):
             h = F.dropout(h, p=self.config.dropout, training=self.training)
         
         # Stage 3: Adaptive Transformer-GNN Fusion
-        fusion_results = self.transformer_gnn_fusion(h, processed_edge_index, node_tokens)
+        fusion_results = self.transformer_gnn_fusion(
+            h,
+            processed_edge_index,
+            node_tokens,
+            batch=batch,
+        )
         h = fusion_results['fused_features']
         all_attention_weights.update(fusion_results['attention_weights'])
         
