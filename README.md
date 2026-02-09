@@ -464,6 +464,23 @@ This visualization shows the complete data flow from taint sources (user input) 
 
 ---
 
+### **Sources & Sinks (Taint Flow Graph)**
+
+<details>
+<summary>View sources and sinks graph (click to expand)</summary>
+
+![Sources and Sinks](docs/images/taint_sources_sinks.png)
+
+</details>
+
+**How to correlate with DFG/CFG/PDG outputs:**
+- **Source/Sink labels** in the graph map to code lines; use the node tooltip line + method, then open the matching **Graph Index** entry in the HTML report.
+- **Multi-hop paths** listed in the graph correspond to entries in `dfg_paths.txt`/`dfg_paths.html` for the same method range.
+- **DFG/PDG** confirm the *data* dependency chain from source to sink, while **CFG/PDG** confirm the *control* dependency context.
+- If the graph shows a sink but the **DFG path** is absent, treat it as a heuristic lead and validate directly in code.
+
+---
+
 ### **Taint + Graph Guided Vulnerability Discovery (Methodology)**
 
 This section documents the **exact, implementation‑accurate workflow** for using taint results and source graphs to validate vulnerabilities.

@@ -853,7 +853,7 @@ def _apply_debug_utilities(
             else:
                 output_path = Path("analysis") / f"taint_flow_graph_{source_path.stem}.html"
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            write_taint_graph(output_path, flows)
+            write_taint_graph(output_path, taint_tracking)
             if report_dir and output_path.is_absolute() and report_dir in output_path.parents:
                 rel_path = output_path.relative_to(report_dir)
                 result["taint_graph"] = {"path": str(rel_path)}

@@ -28,6 +28,12 @@ def _build_java_env(java_home: Optional[str] = None) -> Dict[str, str]:
         env["JAVA_TOOL_OPTIONS"] = (java_opts + " " if java_opts else "") + "-Dfile.encoding=UTF-8"
     env.setdefault("LC_ALL", "en_US.UTF-8")
     env.setdefault("LANG", "en_US.UTF-8")
+    # macOS: Homebrew/conda often exports DYLD_* variables that can break Java's
+    # native linking (e.g., `java.util.zip.Inflater.initIDs()` UnsatisfiedLinkError)
+    # by causing the JVM to load the *wrong* libzip/libjava from /opt/homebrew/lib.
+    env.pop("DYLD_LIBRARY_PATH", None)
+    env.pop("DYLD_FALLBACK_LIBRARY_PATH", None)
+    env.pop("DYLD_INSERT_LIBRARIES", None)
     return env
 
 

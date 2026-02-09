@@ -311,6 +311,74 @@ class ComprehensiveTaintTracker:
         'ESAPI.encoder', 'PolicyFactory.sanitize', 'Jsoup.clean',
         'getCanonicalPath', 'getCanonicalFile', 'toRealPath', 'normalize'
     }
+
+    # Sink method name -> vulnerability type (for flow labeling/filters)
+    SINK_METHOD_TO_VULN = {
+        # SQL Injection
+        'executeQuery': 'SQL_INJECTION',
+        'executeUpdate': 'SQL_INJECTION',
+        'execute': 'SQL_INJECTION',
+        'prepareStatement': 'SQL_INJECTION',
+        'createStatement': 'SQL_INJECTION',
+        'prepareCall': 'SQL_INJECTION',
+        'createQuery': 'SQL_INJECTION',
+        'nativeQuery': 'SQL_INJECTION',
+        # Command Injection
+        'exec': 'COMMAND_INJECTION',
+        'ProcessBuilder': 'COMMAND_INJECTION',
+        'start': 'COMMAND_INJECTION',
+        # Path Traversal / File Ops
+        'FileInputStream': 'PATH_TRAVERSAL',
+        'FileOutputStream': 'PATH_TRAVERSAL',
+        'FileReader': 'PATH_TRAVERSAL',
+        'FileWriter': 'PATH_TRAVERSAL',
+        'RandomAccessFile': 'PATH_TRAVERSAL',
+        'File': 'PATH_TRAVERSAL',
+        'Paths.get': 'PATH_TRAVERSAL',
+        'Files.newInputStream': 'PATH_TRAVERSAL',
+        # Reflection Injection
+        'Class.forName': 'REFLECTION_INJECTION',
+        'forName': 'REFLECTION_INJECTION',
+        'newInstance': 'REFLECTION_INJECTION',
+        'invoke': 'REFLECTION_INJECTION',
+        'getMethod': 'REFLECTION_INJECTION',
+        'getDeclaredField': 'REFLECTION_INJECTION',
+        'getDeclaredMethod': 'REFLECTION_INJECTION',
+        'getConstructor': 'REFLECTION_INJECTION',
+        'getDeclaredConstructor': 'REFLECTION_INJECTION',
+        # XXE
+        'DocumentBuilder': 'XXE',
+        'SAXParser': 'XXE',
+        'XMLReader': 'XXE',
+        'parse': 'XXE',
+        # Deserialization
+        'readObject': 'DESERIALIZATION',
+        'readUnshared': 'DESERIALIZATION',
+        'ObjectInputStream': 'DESERIALIZATION',
+        # XSS / Response output
+        'getWriter': 'XSS',
+        'println': 'XSS',
+        'print': 'XSS',
+        'write': 'XSS',
+        'sendRedirect': 'XSS',
+        'forward': 'XSS',
+        # LDAP Injection
+        'search': 'LDAP_INJECTION',
+        'lookup': 'LDAP_INJECTION',
+        'bind': 'LDAP_INJECTION',
+        # XPath Injection
+        'compile': 'XPATH_INJECTION',
+        'evaluate': 'XPATH_INJECTION',
+        # Trust boundary / config
+        'setProperty': 'TRUST_BOUNDARY_VIOLATION',
+        'setAttribute': 'TRUST_BOUNDARY_VIOLATION',
+        'putValue': 'TRUST_BOUNDARY_VIOLATION',
+        'put': 'TRUST_BOUNDARY_VIOLATION',
+        # Logging / leakage
+        'printStackTrace': 'LOG_INJECTION',
+        'System.out': 'LOG_INJECTION',
+        'System.err': 'LOG_INJECTION',
+    }
     
     def __init__(
         self,
@@ -334,6 +402,9 @@ class ComprehensiveTaintTracker:
         self.tainted_fields: Set[str] = set()
         self.sanitizer_analysis: Dict[str, Any] = {}
         self.template_engine_analysis: Dict[str, Any] = {}
+        self.taint_flow_edges: List[Dict[str, Any]] = []
+        self.taint_node_metadata: Dict[str, Dict[str, Any]] = {}
+        self.method_by_line: Dict[int, str] = {}
         
         # Advanced Taint Tracking Metrics
         self.implicit_flows: Dict[str, List[str]] = defaultdict(list)  # var -> control dependencies
@@ -356,6 +427,7 @@ class ComprehensiveTaintTracker:
     def analyze_java_code(self, source_code: str, source_path: Optional[str] = None) -> Dict[str, Any]:
         """Comprehensive taint analysis of Java source code"""
         lines = source_code.split('\n')
+        self.method_by_line = self._index_methods(lines)
         
         # Phase 1: Detect taint sources (3-tier detection)
         self._detect_taint_sources(lines)
@@ -366,9 +438,9 @@ class ComprehensiveTaintTracker:
         # Phase 3: Detect tainted fields
         self._detect_tainted_fields(lines)
         
-        # Phase 4: Build taint flow graph
-        self._build_taint_flows()
-        
+        # Phase 4: Detect sink usage (for flow labeling)
+        self._detect_sink_flows(lines)
+
         # Phase 5: Perform alias analysis refinement (PLDI 2024)
         self._perform_alias_refinement()
         
@@ -383,6 +455,10 @@ class ComprehensiveTaintTracker:
         self._track_interprocedural(lines)
         self._detect_sanitizers_advanced(lines)
         self._detect_template_engines(lines)
+
+        # Phase 7: Build taint flow graph (after sanitizers for accurate flags)
+        self._finalize_taint_flow_edges()
+        self._build_taint_flows()
         
         self._run_tai_e(source_code, source_path)
         return self.get_results()
@@ -448,6 +524,14 @@ class ComprehensiveTaintTracker:
                     if framework_type in type_name:
                         self.tainted_variables.add(var_name)
                         self.taint_assignments[var_name] = f"Framework:{framework_type}"
+                        self._record_taint_edge(
+                            source=f"Framework:{framework_type}",
+                            target=var_name,
+                            line_number=i,
+                            kind="source",
+                            reason="framework_source",
+                            source_role="source",
+                        )
                         self.logger.debug(f"Tier 1 taint: {var_name} ({framework_type}) @ L{i}")
                         
             # Tier 2: Heuristic-Based (parameter names)
@@ -464,6 +548,14 @@ class ComprehensiveTaintTracker:
                         if param_name in self.HEURISTIC_TAINT_PARAMS:
                             self.tainted_variables.add(param_name)
                             self.taint_assignments[param_name] = f"Heuristic:{param_name}"
+                            self._record_taint_edge(
+                                source=f"Heuristic:{param_name}",
+                                target=param_name,
+                                line_number=i,
+                                kind="source",
+                                reason="heuristic_source",
+                                source_role="source",
+                            )
                             self.logger.debug(f"Tier 2 taint: {param_name} (heuristic) @ L{i}")
                             
             # Tier 3: Conservative (public String parameters)
@@ -482,6 +574,14 @@ class ComprehensiveTaintTracker:
                                 if param_name not in self.tainted_variables:
                                     self.tainted_variables.add(param_name)
                                     self.taint_assignments[param_name] = "Conservative:{}".format(param_type)
+                                    self._record_taint_edge(
+                                        source=f"Conservative:{param_type}",
+                                        target=param_name,
+                                        line_number=i,
+                                        kind="source",
+                                        reason="conservative_source",
+                                        source_role="source",
+                                    )
                                     self.logger.debug(f"Tier 3 taint: {param_name} ({param_type}) @ L{i}")
                                     
     def _propagate_taint(self, lines: List[str]):
@@ -534,6 +634,13 @@ class ComprehensiveTaintTracker:
                 if source in self.tainted_variables and source not in self.sanitized_variables:
                     self.tainted_variables.add(target)
                     self.taint_assignments[target] = f"{source}(direct)"
+                    self._record_taint_edge(
+                        source=source,
+                        target=target,
+                        line_number=i,
+                        kind="assign",
+                        reason="direct",
+                    )
                     self.logger.debug(f"Direct taint: {source} -> {target} @ L{i}")
 
             # Field read: target = obj.field
@@ -543,6 +650,13 @@ class ComprehensiveTaintTracker:
                 if field_key in self.tainted_fields and target not in self.sanitized_variables:
                     self.tainted_variables.add(target)
                     self.taint_assignments[target] = f"{field_key}(field)"
+                    self._record_taint_edge(
+                        source=field_key,
+                        target=target,
+                        line_number=i,
+                        kind="field",
+                        reason="field_read",
+                    )
                     self.logger.debug(f"Field taint: {field_key} -> {target} @ L{i}")
                     
             # String concatenation: target = str1 + str2
@@ -557,6 +671,13 @@ class ComprehensiveTaintTracker:
                     if var in self.tainted_variables and var not in self.sanitized_variables:
                         self.tainted_variables.add(target)
                         self.taint_assignments[target] = f"{var}(concat)"
+                        self._record_taint_edge(
+                            source=var,
+                            target=target,
+                            line_number=i,
+                            kind="concat",
+                            reason="concat",
+                        )
                         self.logger.debug(f"Concat taint: {var} + ... -> {target} @ L{i}")
                         break
                         
@@ -571,6 +692,13 @@ class ComprehensiveTaintTracker:
                                 if target not in self.sanitized_variables:
                                     self.tainted_variables.add(target)
                                     self.taint_assignments[target] = f"{tainted_var}(inline_concat)"
+                                    self._record_taint_edge(
+                                        source=tainted_var,
+                                        target=target,
+                                        line_number=i,
+                                        kind="concat",
+                                        reason="inline_concat",
+                                    )
                                     self.logger.debug(f"Inline concat taint: {tainted_var} -> {target} @ L{i}")
                                     
             # Method call taint propagation: target = obj.method(args)
@@ -580,6 +708,13 @@ class ComprehensiveTaintTracker:
                 if obj in self.tainted_variables and obj not in self.sanitized_variables:
                     self.tainted_variables.add(target)
                     self.taint_assignments[target] = f"{obj}.{method}()"
+                    self._record_taint_edge(
+                        source=obj,
+                        target=target,
+                        line_number=i,
+                        kind="method",
+                        reason=f"{obj}.{method}()",
+                    )
                     self.logger.debug(f"Method taint: {obj}.{method}() -> {target} @ L{i}")
                     
                 # B) If method is a string propagator and object is tainted
@@ -587,6 +722,13 @@ class ComprehensiveTaintTracker:
                     if obj in self.tainted_variables:
                         self.tainted_variables.add(target)
                         self.taint_assignments[target] = f"{obj}.{method}()"
+                        self._record_taint_edge(
+                            source=obj,
+                            target=target,
+                            line_number=i,
+                            kind="method",
+                            reason=f"{obj}.{method}()",
+                        )
                         self.logger.debug(f"Propagator taint: {obj}.{method}() -> {target} @ L{i}")
                         
                 # C) Check if any argument is tainted
@@ -595,6 +737,13 @@ class ComprehensiveTaintTracker:
                         if arg_name in self.tainted_variables:
                             self.tainted_variables.add(target)
                             self.taint_assignments[target] = f"{arg_name} in {method}()"
+                            self._record_taint_edge(
+                                source=arg_name,
+                                target=target,
+                                line_number=i,
+                                kind="arg",
+                                reason=f"{arg_name} in {method}()",
+                            )
                             self.logger.debug(f"Arg taint: {arg_name} in {method}() -> {target} @ L{i}")
                             break
                             
@@ -640,12 +789,134 @@ class ComprehensiveTaintTracker:
                     
     def _build_taint_flows(self):
         """Build comprehensive taint flow graph"""
-        for var_name, source in self.taint_assignments.items():
+        self.taint_flows = []
+        for edge in self.taint_flow_edges:
             self.taint_flows.append({
-                'target': var_name,
-                'source': source,
-                'is_sanitized': var_name in self.sanitized_variables
+                'target': edge.get('target', ''),
+                'source': edge.get('source', ''),
+                'is_sanitized': bool(edge.get('is_sanitized', False))
             })
+    
+    def _index_methods(self, lines: List[str]) -> Dict[int, str]:
+        """Best-effort method name mapping for line numbers."""
+        method_by_line: Dict[int, str] = {}
+        brace_depth = 0
+        current_method: Optional[str] = None
+        method_depth: Optional[int] = None
+        pending_method: Optional[str] = None
+        # Rough method signature matcher (exclude control keywords)
+        sig_re = re.compile(r'\b([A-Za-z_]\w*)\s*\([^;]*\)\s*\{')
+        keywords = {"if", "for", "while", "switch", "catch", "new", "return", "throw", "else", "do", "try"}
+        for i, line in enumerate(lines, 1):
+            stripped = line.strip()
+            match = sig_re.search(stripped)
+            if match:
+                name = match.group(1)
+                if name not in keywords:
+                    pending_method = name
+            if current_method:
+                method_by_line[i] = current_method
+            elif pending_method:
+                method_by_line[i] = pending_method
+            brace_depth += line.count("{") - line.count("}")
+            if pending_method:
+                current_method = pending_method
+                method_depth = brace_depth
+                pending_method = None
+            if current_method and method_depth is not None and brace_depth < method_depth:
+                current_method = None
+                method_depth = None
+        return method_by_line
+
+    def _register_node(
+        self,
+        name: str,
+        line_number: Optional[int],
+        method_name: Optional[str],
+        role: Optional[str] = None,
+        vuln_types: Optional[List[str]] = None,
+        sanitized: Optional[bool] = None,
+    ) -> None:
+        meta = self.taint_node_metadata.setdefault(
+            name,
+            {"roles": set(), "lines": set(), "methods": set(), "vuln_types": set(), "sanitized": False},
+        )
+        if role:
+            meta["roles"].add(role)
+        if line_number:
+            meta["lines"].add(int(line_number))
+        if method_name:
+            meta["methods"].add(method_name)
+        if vuln_types:
+            meta["vuln_types"].update(vuln_types)
+        if sanitized:
+            meta["sanitized"] = True
+
+    def _record_taint_edge(
+        self,
+        source: str,
+        target: str,
+        line_number: int,
+        kind: str,
+        reason: Optional[str] = None,
+        vuln_types: Optional[List[str]] = None,
+        source_role: Optional[str] = None,
+        target_role: Optional[str] = None,
+    ) -> None:
+        method_name = self.method_by_line.get(int(line_number))
+        edge = {
+            "source": source,
+            "target": target,
+            "line": int(line_number),
+            "method": method_name,
+            "kind": kind,
+            "reason": reason or kind,
+            "vuln_types": list(vuln_types or []),
+            "is_sanitized": False,
+        }
+        self.taint_flow_edges.append(edge)
+        self._register_node(source, line_number, method_name, role=source_role or "tainted", vuln_types=vuln_types)
+        self._register_node(target, line_number, method_name, role=target_role or "tainted", vuln_types=vuln_types)
+
+    def _finalize_taint_flow_edges(self) -> None:
+        """Apply sanitization flags after sanitizer detection."""
+        for edge in self.taint_flow_edges:
+            source = edge.get("source", "")
+            target = edge.get("target", "")
+            is_sanitized = target in self.sanitized_variables or source in self.sanitized_variables
+            edge["is_sanitized"] = bool(edge.get("is_sanitized", False) or is_sanitized)
+            if source in self.sanitized_variables:
+                self._register_node(source, edge.get("line"), edge.get("method"), sanitized=True)
+            if target in self.sanitized_variables:
+                self._register_node(target, edge.get("line"), edge.get("method"), sanitized=True)
+
+    def _detect_sink_flows(self, lines: List[str]) -> None:
+        """Detect tainted variables reaching known sink methods (heuristic)."""
+        for i, line in enumerate(lines, 1):
+            stripped = line.strip()
+            if stripped.startswith("import ") or stripped.startswith("package "):
+                continue
+            if stripped.startswith("//") or stripped.startswith("*"):
+                continue
+            if "(" not in line:
+                continue
+            # Heuristic: if a sink token appears and a tainted var appears in the same line
+            tainted_in_line = [var for var in self.tainted_variables if re.search(rf'\b{re.escape(var)}\b', line)]
+            if not tainted_in_line:
+                continue
+            for sink_token, vuln_type in self.SINK_METHOD_TO_VULN.items():
+                if sink_token in line:
+                    sink_node = f"Sink:{sink_token}"
+                    for var in tainted_in_line:
+                        self._record_taint_edge(
+                            source=var,
+                            target=sink_node,
+                            line_number=i,
+                            kind="sink",
+                            reason=f"sink:{sink_token}",
+                            vuln_types=[vuln_type],
+                            target_role="sink",
+                        )
             
     def _perform_alias_refinement(self):
         """Perform iterative alias refinement (PLDI 2024)"""
@@ -1055,6 +1326,17 @@ class ComprehensiveTaintTracker:
             'tainted_fields_count': len(self.tainted_fields),
             'taint_flows': self.taint_flows,
             'taint_flows_count': len(self.taint_flows),
+            'taint_flow_edges': self.taint_flow_edges,
+            'taint_node_metadata': {
+                node: {
+                    "roles": sorted(list(meta.get("roles", set()))),
+                    "lines": sorted(list(meta.get("lines", set()))),
+                    "methods": sorted(list(meta.get("methods", set()))),
+                    "vuln_types": sorted(list(meta.get("vuln_types", set()))),
+                    "sanitized": bool(meta.get("sanitized", False)),
+                }
+                for node, meta in self.taint_node_metadata.items()
+            },
             'alias_analysis': alias_stats,
             'taint_assignments': self.taint_assignments,
             'sanitizer_analysis': self.sanitizer_analysis,

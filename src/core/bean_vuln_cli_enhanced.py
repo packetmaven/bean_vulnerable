@@ -682,7 +682,7 @@ def _apply_debug_utilities_enhanced(
             else:
                 output_path = Path("analysis") / f"taint_flow_graph_{source_path.stem}.html"
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            write_taint_graph(output_path, flows)
+            write_taint_graph(output_path, taint_tracking)
             if report_dir and output_path.is_absolute() and report_dir in output_path.parents:
                 fw_result["taint_graph"] = {"path": str(output_path.relative_to(report_dir))}
             else:
@@ -1335,6 +1335,18 @@ def main():
         if args.gnn_checkpoint and not getattr(fw, "gnn_weights_loaded", False):
             LOG.error("❌ --require-gnn set, but no GNN checkpoint is loaded. Verify --gnn-checkpoint points to a valid file.")
             sys.exit(2)
+
+    # Prepare HTML report directory early so taint-graph paths are consistent
+    report_dir = None
+    if args.html_report:
+        try:
+            report_dir = _prepare_report_dir(Path(args.html_report))
+            # Ensure all later steps use the resolved directory (may differ if we fell back)
+            args.html_report = str(report_dir)
+        except ValueError as exc:
+            LOG.error(str(exc))
+            sys.exit(2)
+        LOG.info(f"📁 HTML report directory: {report_dir}")
     
     # Display configuration
     print("🎯 Bean Vulnerable Enhanced Framework v2.0")
@@ -1351,7 +1363,7 @@ def main():
     results = []
     framework_results = []  # Store original framework results for HTML report
     start_time = time.time()
-    debug_report_dir = Path(args.html_report).expanduser() if args.html_report else None
+    debug_report_dir = report_dir
     
     async def process_inputs():
         """Async processing of multiple inputs with enhanced analysis"""
@@ -1571,14 +1583,7 @@ def main():
     
     # Generate graphs using Joern comprehensive script
     if args.html_report and (args.export_dfg or args.export_cfg or args.export_pdg) and args.input:
-        try:
-            report_dir = _prepare_report_dir(Path(args.html_report))
-            # Ensure later steps (HTML report, auto-open, etc.) use the resolved directory
-            # returned by `_prepare_report_dir` (may differ if we had to fall back).
-            args.html_report = str(report_dir)
-        except ValueError as exc:
-            LOG.error(str(exc))
-            sys.exit(2)
+        report_dir = Path(args.html_report).expanduser()
         
         # Get source file path
         source_path = Path(args.input[0]).expanduser().resolve()

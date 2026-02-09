@@ -95,6 +95,10 @@ evidence_spans.json
 !examples/*.jpg
 !examples/*.jpeg
 !examples/*.webp
+!docs/images/*.png
+!docs/images/*.jpg
+!docs/images/*.jpeg
+!docs/images/*.webp
 
 # Binary Files
 *.bin
