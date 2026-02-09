@@ -1742,6 +1742,8 @@ def _generate_badges_section(result: Dict[str, Any]) -> str:
     gnn_weighted = bool(spatial.get("used_in_scoring", False))
     gnn_forward = bool(result.get("gnn_utilized") or spatial.get("forward_called"))
     analysis_method = str(result.get("analysis_method", "")).lower()
+    fusion = result.get("confidence_fusion", {}) if isinstance(result.get("confidence_fusion", {}), dict) else {}
+    fusion_source = str(fusion.get("source", "") or "").strip()
     analysis_config = result.get("analysis_config", {}) if isinstance(result.get("analysis_config", {}), dict) else {}
     sink_preset = analysis_config.get("sink_signature_preset") or result.get("sink_signature_preset")
     if sink_preset:
@@ -1752,7 +1754,16 @@ def _generate_badges_section(result: Dict[str, Any]) -> str:
     else:
         preset_note = "Sink signature preset not requested; default sink registry is used."
 
-    if gnn_weighted:
+    if fusion_source:
+        if fusion_source == "heuristic_only":
+            vuln_desc = "The analysis identified a security issue with a confidence score (heuristics dominated; GNN did not increase confidence)"
+        elif fusion_source == "heuristic_only_ood":
+            vuln_desc = "The analysis identified a security issue with a confidence score (CESCL flagged OOD; heuristics used as a safety fallback)"
+        elif fusion_source in {"gnn_boost", "gnn_calibrated", "gnn_only"}:
+            vuln_desc = f"The analysis identified a security issue with a confidence score (asymmetric fusion: {fusion_source})"
+        else:
+            vuln_desc = f"The analysis identified a security issue with a confidence score (fusion: {fusion_source})"
+    elif gnn_weighted:
         vuln_desc = "The analysis (GNN-weighted) identified a security issue with a confidence score"
     elif gnn_forward:
         vuln_desc = "The analysis identified a security issue (GNN inference executed but untrained)"
@@ -1856,6 +1867,55 @@ def _generate_findings_section(result: Dict[str, Any]) -> str:
     implicit_note = "count" if advanced_available else "enable --implicit-flows"
     path_note = "feasible paths" if advanced_available else "enable --path-sensitive"
     jni_note = f"methods: {jni_methods}" if advanced_available else "enable --native-jni"
+
+    # --- Confidence / calibration breakdown (GNN + CESCL + fusion) ---
+    heuristic_conf = result.get("heuristic_confidence")
+    gnn_conf = result.get("gnn_confidence")
+    gnn_conf_logit = result.get("gnn_confidence_logit_only")
+    combined_logit_only = result.get("confidence_logit_only")
+
+    fusion = result.get("confidence_fusion", {}) if isinstance(result.get("confidence_fusion", {}), dict) else {}
+    fusion_source = fusion.get("source")
+    fusion_ood = fusion.get("ood_detected")
+
+    cescl_available = bool(result.get("cescl_available", False))
+    cescl_ood_score = result.get("cescl_ood_score")
+    cescl_is_ood = result.get("cescl_is_ood")
+    cescl_cal = result.get("cescl_calibrated_confidence")
+
+    def _fmt(v: Any) -> str:
+        if isinstance(v, bool):
+            return "true" if v else "false"
+        if isinstance(v, (int, float)):
+            try:
+                return f"{float(v):.4f}"
+            except Exception:
+                return _escape_html(v)
+        if v is None:
+            return "n/a"
+        return _escape_html(v)
+
+    confidence_breakdown = f"""
+        <details class="performance-box" style="margin-top: 18px;">
+            <summary style="cursor: pointer; color: #3498db; font-weight: 600;">Confidence breakdown (heuristic / GNN / CESCL / fusion)</summary>
+            <div style="margin-top: 12px;">
+                <table class="sink-table" style="width: 100%;">
+                    <tr><th style="text-align:left;">Signal</th><th style="text-align:left;">Value</th><th style="text-align:left;">Notes</th></tr>
+                    <tr><td>Final confidence (combined)</td><td>{_fmt(confidence)}</td><td>Used for thresholding / report verdict</td></tr>
+                    <tr><td>Final confidence (logit-only)</td><td>{_fmt(combined_logit_only)}</td><td>Combined before CESCL prototype blending</td></tr>
+                    <tr><td>Heuristic confidence</td><td>{_fmt(heuristic_conf)}</td><td>Pattern + taint evidence baseline</td></tr>
+                    <tr><td>GNN confidence (final)</td><td>{_fmt(gnn_conf)}</td><td>May include CESCL blended probs when available</td></tr>
+                    <tr><td>GNN confidence (logit-only)</td><td>{_fmt(gnn_conf_logit)}</td><td>Softmax(binary_logits / temperature)</td></tr>
+                    <tr><td>Fusion source</td><td>{_fmt(fusion_source)}</td><td>Asymmetric policy: boost allowed, suppression forbidden</td></tr>
+                    <tr><td>Fusion OOD detected</td><td>{_fmt(fusion_ood)}</td><td>Uses CESCL OOD if prototypes + embedding available</td></tr>
+                    <tr><td>CESCL available</td><td>{_fmt(cescl_available)}</td><td>Loaded from checkpoint prototypes</td></tr>
+                    <tr><td>CESCL OOD score</td><td>{_fmt(cescl_ood_score)}</td><td>Higher means further from all prototypes</td></tr>
+                    <tr><td>CESCL is OOD</td><td>{_fmt(cescl_is_ood)}</td><td>OOD gate used to avoid unsafe GNN reliance</td></tr>
+                    <tr><td>CESCL calibrated confidence</td><td>{_fmt(cescl_cal)}</td><td>Geometry-based confidence from prototype distance</td></tr>
+                </table>
+            </div>
+        </details>
+    """
     
     return f"""<div class="section">
         <h3 style="color: #2c3e50; font-size: 20px; margin-bottom: 15px;">📊 Findings</h3>
@@ -1899,6 +1959,7 @@ def _generate_findings_section(result: Dict[str, Any]) -> str:
             </div>
         </div>
         {detected_badges}
+        {confidence_breakdown}
     </div>"""
 
 

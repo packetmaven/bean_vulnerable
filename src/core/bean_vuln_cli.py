@@ -86,11 +86,8 @@ def sanitize_for_json(obj, seen=None, depth=0, max_depth=50):
     if isinstance(obj, dict):
         seen.add(obj_id)
         try:
-            return {
-                k: sanitize_for_json(v, seen, depth + 1, max_depth)
-                for k, v in obj.items()
-                if isinstance(k, str)
-            }
+            # JSON requires string keys. Preserve non-string keys by coercing.
+            return {str(k): sanitize_for_json(v, seen, depth + 1, max_depth) for k, v in obj.items()}
         finally:
             seen.discard(obj_id)
 
@@ -721,10 +718,104 @@ def analyze_directory(
             'error': 'No Java files found',
             'cpg': {'nodes': 0, 'edges': 0, 'methods': 0, 'calls': 0}
         }
-    
-    # Analyze first file or combine all files
-    first_file = java_files[0]
-    return analyze_path(first_file, False, False, None, cli_args, report_dir)
+
+    # Analyze ALL discovered Java files (as documented in README).
+    # Returns a dataset-style dict with per-file results.
+    results: List[Dict[str, Any]] = []
+    processed_count = 0
+    successful_count = 0
+    total_nodes = 0
+    total_edges = 0
+    total_methods = 0
+    total_calls = 0
+    gnn_used = 0
+
+    # Deterministic ordering makes runs reproducible
+    java_files = sorted(java_files, key=lambda p: str(p))
+
+    for source_path in java_files:
+        processed_count += 1
+        try:
+            file_result = analyze_path(
+                source_path,
+                False,  # recursive is irrelevant for single files
+                False,  # keep_workdir unused here (handled by JoernIntegrator)
+                None,   # export_dir currently unused in analyze_path
+                cli_args,
+                report_dir,
+            )
+            if not isinstance(file_result, dict):
+                raise TypeError(f"analyze_path() returned non-dict for {source_path}: {type(file_result)}")
+
+            # Attach per-file metadata (main() will attach directory metadata separately)
+            file_result.setdefault("input", str(source_path))
+            file_result.setdefault("input_type", "file")
+
+            results.append(file_result)
+            successful_count += 1
+
+            cpg = file_result.get("cpg", {}) if isinstance(file_result.get("cpg", {}), dict) else {}
+            total_nodes += int(cpg.get("nodes", 0) or 0)
+            total_edges += int(cpg.get("edges", 0) or 0)
+            total_methods += int(cpg.get("methods", 0) or 0)
+            total_calls += int(cpg.get("calls", 0) or 0)
+
+            if file_result.get("gnn_utilized"):
+                gnn_used += 1
+        except Exception as e:
+            LOG.error(f"❌ Failed to analyze {source_path}: {e}")
+            results.append(
+                {
+                    "input": str(source_path),
+                    "input_type": "file",
+                    "vulnerability_detected": False,
+                    "confidence": 0.0,
+                    "error": str(e),
+                    "cpg": {"nodes": 0, "edges": 0, "methods": 0, "calls": 0},
+                }
+            )
+
+    avg_confidence = (
+        sum(float(r.get("confidence", 0.0) or 0.0) for r in results) / len(results)
+        if results
+        else 0.0
+    )
+    any_vuln = any(bool(r.get("vulnerability_detected", False)) for r in results)
+    gnn_rate = (gnn_used / len(results)) if results else 0.0
+
+    LOG.info(
+        "✅ Directory scan complete: %d files processed, %d successful (GNN rate %.1f%%)",
+        processed_count,
+        successful_count,
+        gnn_rate * 100.0,
+    )
+
+    return {
+        "dataset_type": "directory",
+        "total_files": len(java_files),
+        "processed_count": processed_count,
+        "successful_count": successful_count,
+        "results": results,
+        "summary": {
+            "vulnerabilities_detected": sum(1 for r in results if r.get("vulnerability_detected")),
+            "average_confidence": avg_confidence,
+            "total_nodes": total_nodes,
+            "total_edges": total_edges,
+            "total_methods": total_methods,
+            "total_calls": total_calls,
+            "gnn_utilization_rate": gnn_rate,
+        },
+        # Provide top-level fields so the CLI summary line remains meaningful.
+        "vulnerability_detected": any_vuln,
+        "confidence": avg_confidence,
+        "cpg": {
+            "nodes": total_nodes,
+            "edges": total_edges,
+            "methods": total_methods,
+            "calls": total_calls,
+        },
+        "gnn_utilized": gnn_used > 0,
+    }
 
 
 def _apply_debug_utilities(
@@ -1281,6 +1372,17 @@ def main():
                 # Use the COMPREHENSIVE Joern script for detailed graphs
                 script_path = Path(__file__).parent.parent.parent / "comprehensive_graphs.sc"
                 env = os.environ.copy()
+                # macOS: Homebrew often exports DYLD_LIBRARY_PATH which can break Joern/Java native
+                # linking (e.g., `java.util.zip.Inflater.initIDs()` UnsatisfiedLinkError).
+                env.pop("DYLD_LIBRARY_PATH", None)
+                env.pop("DYLD_FALLBACK_LIBRARY_PATH", None)
+                env.pop("DYLD_INSERT_LIBRARIES", None)
+                # Also ensure UTF-8 encoding to avoid MalformedInputException.
+                java_opts = env.get("JAVA_TOOL_OPTIONS", "")
+                if "-Dfile.encoding=UTF-8" not in java_opts:
+                    env["JAVA_TOOL_OPTIONS"] = (java_opts + " " if java_opts else "") + "-Dfile.encoding=UTF-8"
+                env.setdefault("LC_ALL", "en_US.UTF-8")
+                env.setdefault("LANG", "en_US.UTF-8")
                 env['SOURCE_FILE'] = str(p.absolute())
                 env['OUTPUT_DIR'] = str(report_dir.absolute())
                 

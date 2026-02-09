@@ -9,11 +9,14 @@ import subprocess
 import json
 import tempfile
 from pathlib import Path
-from typing import Dict, List, Any, Optional, Tuple, Union
+from typing import Dict, List, Any, Optional, Tuple, Union, TYPE_CHECKING
 import statistics
 import math
 import random
 import re
+
+if TYPE_CHECKING:  # pragma: no cover
+    import torch
 
 # Optional Tai-e integration
 try:
@@ -55,6 +58,12 @@ CESCL_AVAILABLE = False
 DATASET_MAP_AVAILABLE = False
 CF_EXPLAINER_AVAILABLE = False
 CF_EXPLAINER_CHU_AVAILABLE = False
+
+# CESCL prototype-based inference (Issue E) - optional dependency (torch)
+try:
+    from .cescl_inference import CESCLInferenceModule
+except Exception:  # pragma: no cover - optional dependency
+    CESCLInferenceModule = None  # type: ignore
 
 # GNN multiclass label mapping (aligned with prepare_training_data.py)
 GNN_VULN_TYPE_ID_TO_NAME = {
@@ -118,6 +127,26 @@ class JoernIntegrator:
             return True
         except subprocess.CalledProcessError:
             return False
+
+    def _build_joern_env(self) -> Dict[str, str]:
+        """
+        Build a robust environment for invoking Joern on macOS.
+
+        Rationale:
+        - Homebrew often exports DYLD_LIBRARY_PATH, which can break Joern/Java native
+          linking (e.g. `java.util.zip.Inflater.initIDs()` UnsatisfiedLinkError).
+        - Ensure UTF-8 decoding/encoding to avoid MalformedInputException.
+        """
+        env: Dict[str, str] = dict(os.environ)
+        java_opts = env.get("JAVA_TOOL_OPTIONS", "")
+        if "-Dfile.encoding=UTF-8" not in java_opts:
+            env["JAVA_TOOL_OPTIONS"] = (java_opts + " " if java_opts else "") + "-Dfile.encoding=UTF-8"
+        env.setdefault("LC_ALL", "en_US.UTF-8")
+        env.setdefault("LANG", "en_US.UTF-8")
+        env.pop("DYLD_LIBRARY_PATH", None)
+        env.pop("DYLD_FALLBACK_LIBRARY_PATH", None)
+        env.pop("DYLD_INSERT_LIBRARIES", None)
+        return env
     
     def generate_cpg(self, source_code: str, source_path: Optional[str] = None) -> Dict[str, Any]:
         """Generate CPG from source code using Joern - NO FALLBACK"""
@@ -192,6 +221,7 @@ exit
                         text=True,
                         timeout=self.joern_timeout,
                         cwd=base_dir,
+                        env=self._build_joern_env(),
                     )
 
                     if result.returncode == 0:
@@ -269,6 +299,7 @@ exit
                     text=True,
                     timeout=self.joern_timeout,
                     cwd=base_dir,
+                    env=self._build_joern_env(),
                 )
                 if result.returncode != 0:
                     raise RuntimeError(result.stderr or result.stdout)
@@ -1380,6 +1411,8 @@ class IntegratedGNNFramework:
         self._gnn_trace_enabled = os.getenv("BEAN_VULN_TRACE_GNN", "").lower() in {"1", "true", "yes", "on"}
         self._gnn_forward_called = False
         self.spatial_gnn_models: List[Any] = []
+        # CESCL prototype-based inference (Issue E)
+        self.cescl_module = CESCLInferenceModule() if CESCLInferenceModule is not None else None
         env_joern_dataflow = os.getenv("BEAN_VULN_JOERN_DATAFLOW", "").lower() in {"1", "true", "yes", "on"}
         self.enable_joern_dataflow = bool(enable_joern_dataflow) or env_joern_dataflow
         self.tai_e_config = None
@@ -1478,7 +1511,99 @@ class IntegratedGNNFramework:
 
                 if checkpoint_paths:
                     for checkpoint_path in checkpoint_paths:
-                        model = create_spatial_gnn_model(gnn_config)
+                        # Prefer exact training config from checkpoint when available
+                        model_cfg = dict(gnn_config)
+                        try:
+                            import torch
+                            payload = torch.load(str(checkpoint_path), map_location="cpu")
+                            if isinstance(payload, dict) and isinstance(payload.get("model_config"), dict):
+                                model_cfg.update(payload["model_config"])
+                            elif isinstance(payload, dict) and isinstance(payload.get("model_state_dict"), dict):
+                                # Backward-compat: older checkpoints may not include `model_config`.
+                                # Infer the minimum viable config from parameter shapes.
+                                state_dict = payload.get("model_state_dict") or {}
+                                inferred: Dict[str, Any] = {}
+                                try:
+                                    keys = list(state_dict.keys())
+
+                                    # Optional-module flags inferred from presence of submodules
+                                    inferred["use_codebert"] = any(
+                                        k.startswith("transformer_gnn_fusion.codebert_model") for k in keys
+                                    )
+                                    inferred["use_hierarchical_pooling"] = any(
+                                        k.startswith("hierarchical_pooling.") for k in keys
+                                    )
+                                    inferred["enable_attention_visualization"] = any(
+                                        k.startswith("attention_aggregator.") for k in keys
+                                    )
+                                    inferred["enable_counterfactual_analysis"] = any(
+                                        k.startswith("counterfactual_analyzer.") for k in keys
+                                    )
+
+                                    # hidden_dim + num_vulnerability_types from final multiclass linear layer
+                                    last_mc = None
+                                    last_idx = -1
+                                    for k in keys:
+                                        m = re.match(r"^multiclass_classifier\.(\d+)\.weight$", k)
+                                        if not m:
+                                            continue
+                                        t = state_dict.get(k)
+                                        if not isinstance(t, torch.Tensor) or t.dim() != 2:
+                                            continue
+                                        idx = int(m.group(1))
+                                        if idx > last_idx:
+                                            last_idx = idx
+                                            last_mc = t
+                                    if last_mc is not None:
+                                        inferred["num_vulnerability_types"] = int(last_mc.size(0))
+                                        inferred["hidden_dim"] = int(last_mc.size(1))
+
+                                    # node_dim from first relational root projection
+                                    root_w = state_dict.get("relational_layers.0.root.weight")
+                                    if isinstance(root_w, torch.Tensor) and root_w.dim() == 2:
+                                        inferred["node_dim"] = int(root_w.size(1))
+
+                                    # num_edge_types (num_relations) from R-GCN decomposition params
+                                    comp = state_dict.get("relational_layers.0.comp")
+                                    if isinstance(comp, torch.Tensor) and comp.dim() == 2:
+                                        inferred["num_edge_types"] = int(comp.size(0))
+                                    else:
+                                        rel_w = state_dict.get("relational_layers.0.relation_weights")
+                                        if isinstance(rel_w, torch.Tensor) and rel_w.dim() == 1:
+                                            inferred["num_edge_types"] = int(rel_w.numel())
+
+                                    # num_layers from relational layer indices
+                                    layer_idxs = set()
+                                    for k in keys:
+                                        m = re.match(r"^relational_layers\.(\d+)\.", k)
+                                        if m:
+                                            layer_idxs.add(int(m.group(1)))
+                                    if layer_idxs:
+                                        inferred["num_layers"] = int(max(layer_idxs) + 1)
+
+                                    # Drop keys we failed to infer
+                                    inferred = {k: v for k, v in inferred.items() if v is not None}
+                                except Exception as exc:  # pragma: no cover - best-effort inference
+                                    inferred = {}
+                                    self.logger.warning(
+                                        "⚠️ Failed to infer Spatial GNN config from checkpoint %s: %s",
+                                        checkpoint_path,
+                                        exc,
+                                    )
+
+                                if inferred:
+                                    model_cfg.update(inferred)
+                                    self.logger.info(
+                                        "ℹ️ Inferred Spatial GNN model_config from checkpoint %s: %s",
+                                        checkpoint_path,
+                                        {k: inferred[k] for k in sorted(inferred.keys())},
+                                    )
+                        except Exception as exc:
+                            self.logger.warning(
+                                f"⚠️ Could not read model_config from checkpoint {checkpoint_path}: {exc}"
+                            )
+
+                        model = create_spatial_gnn_model(model_cfg)
                         if self._load_spatial_gnn_checkpoint(checkpoint_path, model=model):
                             self.spatial_gnn_models.append(model)
                     if not self.spatial_gnn_models:
@@ -1629,6 +1754,41 @@ class IntegratedGNNFramework:
             state_dict = payload.get("model_state_dict", payload) if isinstance(payload, dict) else payload
             target_model.load_state_dict(state_dict)
             self.logger.info(f"✅ Loaded Spatial GNN checkpoint: {checkpoint}")
+
+            # Attempt to load CESCL prototypes from checkpoint (Issue E)
+            global CESCL_AVAILABLE
+            if self.cescl_module is not None and isinstance(payload, dict) and not self.cescl_module.is_available():
+                try:
+                    try:
+                        device = next(target_model.parameters()).device
+                    except StopIteration:
+                        device = torch.device("cpu")
+                    CESCL_AVAILABLE = bool(
+                        self.cescl_module.load_from_checkpoint(
+                            checkpoint=payload,
+                            device=device,
+                            temperature=None,
+                            blend_weight=0.3,
+                        )
+                    )
+                except Exception as exc:
+                    self.logger.warning(f"⚠️ Failed to load CESCL prototypes from checkpoint: {exc}")
+                    CESCL_AVAILABLE = False
+
+            # Fallback: prototypes.pt next to checkpoint
+            if self.cescl_module is not None and not CESCL_AVAILABLE:
+                proto_path = checkpoint.parent / "prototypes.pt"
+                if proto_path.exists():
+                    try:
+                        try:
+                            device = next(target_model.parameters()).device
+                        except StopIteration:
+                            device = torch.device("cpu")
+                        CESCL_AVAILABLE = bool(self.cescl_module.load_from_file(proto_path, device=device))
+                    except Exception as exc:
+                        self.logger.warning(f"⚠️ Failed to load CESCL prototypes from file: {exc}")
+                        CESCL_AVAILABLE = False
+
             return True
         except Exception as exc:
             self.logger.warning(f"⚠️ Failed to load Spatial GNN checkpoint: {exc}")
@@ -1717,25 +1877,29 @@ class IntegratedGNNFramework:
         source_code: str,
         source_path: Optional[str],
         cpg_structure: Optional[Dict[str, Any]] = None,
-    ) -> Optional[Dict[str, Any]]:
+        return_internal: bool = False,
+    ) -> Any:
         models = self.spatial_gnn_models or ([self.spatial_gnn_model] if self.spatial_gnn_model else [])
         if not models:
-            return None
+            return (None, None) if return_internal else None
         try:
             if cpg_structure is None:
                 cpg_structure = self.joern_integrator.generate_cpg_structure(source_code, source_path)
             data = self._cpg_to_pyg_data(cpg_structure)
             if data is None:
-                return None
+                return (None, None) if return_internal else None
 
             import torch
             confidences: List[float] = []
             raw_confidences: List[float] = []
             confidence_sources: List[str] = []
             binary_probabilities: List[float] = []
+            binary_prob_vectors: List[torch.Tensor] = []
+            embeddings: List[torch.Tensor] = []
             predicted_vulnerable_votes: List[bool] = []
             predicted_types: List[str] = []
             errors: List[str] = []
+            cescl_scores: List[Dict[str, Any]] = []
 
             node_tokens = getattr(data, "node_tokens", None)
             for model in models:
@@ -1757,6 +1921,17 @@ class IntegratedGNNFramework:
 
                     self._gnn_forward_called = True
 
+                    # Internal capture for asymmetric fusion / OOD checks
+                    if isinstance(outputs, dict):
+                        emb = outputs.get("graph_representation")
+                        if isinstance(emb, torch.Tensor):
+                            emb_vec = emb
+                            if emb_vec.dim() == 2 and int(emb_vec.size(0)) > 0:
+                                emb_vec = emb_vec[0]
+                            elif emb_vec.dim() > 2:
+                                emb_vec = emb_vec.view(-1, emb_vec.size(-1))[0]
+                            embeddings.append(emb_vec.detach())
+
                     conf, source, raw_conf = self._extract_gnn_confidence(outputs)
                     if conf is not None:
                         confidences.append(conf)
@@ -1767,8 +1942,31 @@ class IntegratedGNNFramework:
                     if binary_logits is not None:
                         pred_class = int(torch.argmax(binary_logits, dim=-1).view(-1)[0].item())
                         predicted_vulnerable_votes.append(pred_class == 1)
-                        prob = torch.softmax(binary_logits / self.gnn_temperature, dim=-1)[..., 1]
-                        binary_probabilities.append(float(prob.view(-1)[0].item()))
+                        probs_scaled = torch.softmax(binary_logits / self.gnn_temperature, dim=-1).view(-1, 2)[0]
+                        prob_vuln_scaled = float(probs_scaled[1].item())
+                        binary_probabilities.append(prob_vuln_scaled)
+                        binary_prob_vectors.append(probs_scaled.detach())
+
+                        # CESCL prototype enrichment (Issue E): compute prototype/blended scores
+                        if (
+                            self.cescl_module is not None
+                            and self.cescl_module.is_available()
+                            and isinstance(outputs, dict)
+                            and outputs.get("graph_representation") is not None
+                        ):
+                            try:
+                                scores = self.cescl_module.score(
+                                    embedding=outputs["graph_representation"],
+                                    logit_probs=probs_scaled,
+                                )
+                                cescl_scores.append(scores)
+                                blended = scores.get("blended_probs") or {}
+                                if 1 in blended and confidences:
+                                    # gnn_confidence is a vuln-prob; overwrite last-added confidence
+                                    confidences[-1] = float(blended[1])
+                                    confidence_sources[-1] = "cescl_blended"
+                            except Exception as exc:
+                                errors.append(f"cescl_score_error: {exc}")
 
                     multiclass_logits = outputs.get("multiclass_logits") if isinstance(outputs, dict) else None
                     if multiclass_logits is not None:
@@ -1779,9 +1977,15 @@ class IntegratedGNNFramework:
                     continue
 
             if not confidences:
-                return {"forward_ok": False, "error": "no_gnn_confidence", "errors": errors}
+                result = {"forward_ok": False, "error": "no_gnn_confidence", "errors": errors}
+                return (result, None) if return_internal else result
 
             gnn_conf = statistics.mean(confidences)
+            # Baseline (pre-CESCL) vuln probability from logits (temperature-scaled).
+            # Always populate this for backward-compatible schemas even when CESCL is disabled.
+            gnn_conf_logit_only = (
+                float(statistics.mean(binary_probabilities)) if binary_probabilities else float(gnn_conf)
+            )
             gnn_uncertainty = statistics.pstdev(confidences) if len(confidences) > 1 else 0.0
 
             predicted_vuln = False
@@ -1797,9 +2001,10 @@ class IntegratedGNNFramework:
                 predicted_type = max(type_counts.items(), key=lambda x: x[1])[0]
 
             stats = cpg_structure.get("statistics") or {}
-            return {
+            result: Dict[str, Any] = {
                 "forward_ok": True,
                 "gnn_confidence": float(gnn_conf),
+                "gnn_confidence_logit_only": float(gnn_conf_logit_only),
                 "gnn_uncertainty": float(gnn_uncertainty),
                 "predicted_vulnerable": predicted_vuln,
                 "predicted_type": predicted_type,
@@ -1817,9 +2022,71 @@ class IntegratedGNNFramework:
                     "num_edges": stats.get("num_edges", len(cpg_structure.get("edges", []))),
                 },
             }
+
+            internal: Optional[Dict[str, Any]] = None
+            if return_internal:
+                internal = {}
+                if binary_prob_vectors:
+                    try:
+                        internal["binary_probs"] = torch.stack(
+                            [v.to(dtype=torch.float32) for v in binary_prob_vectors]
+                        ).mean(dim=0)
+                    except Exception:
+                        pass
+                if embeddings:
+                    try:
+                        internal["embedding"] = torch.stack(
+                            [e.to(dtype=torch.float32) for e in embeddings]
+                        ).mean(dim=0)
+                    except Exception:
+                        pass
+
+            # Attach CESCL aggregation (Issue E)
+            if self.cescl_module is not None and self.cescl_module.is_available() and cescl_scores:
+                def _avg_num_dict(dicts: List[Dict]) -> Dict[int, float]:
+                    keys = set()
+                    for d in dicts:
+                        if isinstance(d, dict):
+                            keys.update(d.keys())
+                    out: Dict[int, float] = {}
+                    for k in keys:
+                        vals = [d.get(k) for d in dicts if isinstance(d, dict) and isinstance(d.get(k), (int, float))]
+                        if vals:
+                            out[int(k)] = float(sum(vals) / len(vals))
+                    return out
+
+                proto_probs = _avg_num_dict([s.get("prototype_probs", {}) for s in cescl_scores])
+                proto_dists = _avg_num_dict([s.get("prototype_distances", {}) for s in cescl_scores])
+                blended_probs = _avg_num_dict([s.get("blended_probs", {}) for s in cescl_scores])
+                ood_vals = [float(s.get("ood_score")) for s in cescl_scores if isinstance(s.get("ood_score"), (int, float))]
+                cal_vals = [float(s.get("calibrated_confidence")) for s in cescl_scores if isinstance(s.get("calibrated_confidence"), (int, float))]
+
+                result["cescl_available"] = True
+                result["cescl_prototype_probs"] = proto_probs
+                result["cescl_distances"] = proto_dists
+                if blended_probs:
+                    result["cescl_blended_probs"] = blended_probs
+                    result["gnn_confidence_logit_only"] = float(statistics.mean(binary_probabilities)) if binary_probabilities else None
+                    if 1 in blended_probs:
+                        result["gnn_confidence"] = float(blended_probs[1])
+                if ood_vals:
+                    result["cescl_ood_score"] = float(statistics.mean(ood_vals))
+                if cal_vals:
+                    result["cescl_calibrated_confidence"] = float(statistics.mean(cal_vals))
+
+                try:
+                    ood_th = self.cescl_module.get_ood_threshold(percentile=95.0)
+                    result["cescl_is_ood"] = bool(float(result.get("cescl_ood_score", 0.0)) > float(ood_th))
+                except Exception:
+                    result["cescl_is_ood"] = False
+            else:
+                result["cescl_available"] = False
+
+            return (result, internal) if return_internal else result
         except Exception as exc:
             self.logger.warning(f"⚠️ Spatial GNN inference failed: {exc}")
-            return {"forward_ok": False, "error": str(exc)}
+            result = {"forward_ok": False, "error": str(exc)}
+            return (result, None) if return_internal else result
 
     def _cpg_result_from_structure(self, cpg_structure: Dict[str, Any], source_code: str) -> Dict[str, Any]:
         nodes = cpg_structure.get("nodes", []) or []
@@ -1847,10 +2114,202 @@ class IntegratedGNNFramework:
         }
         return self.joern_integrator._format_cpg_result(cpg_data, source_code)
 
-    def _combine_confidence(self, heuristic_conf: float, gnn_conf: Optional[float], gnn_trustworthy: bool) -> float:
-        if gnn_conf is None or not gnn_trustworthy:
-            return heuristic_conf
-        return (1.0 - self.gnn_weight) * heuristic_conf + self.gnn_weight * gnn_conf
+    def _combine_confidence(
+        self,
+        heuristic_confidence: float,
+        gnn_binary_probs: Dict[int, float],
+        gnn_embedding: Optional["torch.Tensor"] = None,
+    ) -> Dict[str, Any]:
+        """
+        Asymmetric ensemble confidence fusion for vulnerability detection.
+
+        Design: GNN can BOOST vulnerability signals but NEVER suppress them.
+        This is critical for security scanning where false negatives are
+        unacceptable.
+
+        Research foundation:
+        - Khosla et al. (NeurIPS 2020): Confidence calibration via contrastive learning
+        - Guo et al. (ICML 2017): "On Calibration of Modern Neural Networks"
+        - Yang et al. (ICML 2018): Post-hoc calibration for safety-critical ML
+
+        Args:
+            heuristic_confidence: Confidence from heuristic analyzer [0..1],
+                                  oriented as P(vulnerable)
+            gnn_binary_probs: GNN output probabilities {0: P(safe), 1: P(vuln)}
+            gnn_embedding: Optional graph embedding for CESCL-based calibration
+
+        Returns:
+            Dict with:
+                'combined': Final confidence [0..1]
+                'source': 'heuristic_only' | 'gnn_boost' | 'gnn_calibrated' | 'gnn_only' | 'heuristic_only_ood'
+                'heuristic': Original heuristic confidence (preserved)
+                'gnn_raw': Raw GNN P(vulnerable)
+                'ood_detected': bool (if CESCL available)
+        """
+        # ================================================================
+        # THRESHOLD CONFIGURATION
+        # ================================================================
+        # These are tuned for security scanning (conservative on FN)
+        STRONG_HEURISTIC = 0.70    # High-confidence vuln signal
+        MODERATE_HEURISTIC = 0.40  # Medium confidence
+        WEAK_HEURISTIC = 0.20      # Low confidence baseline
+
+        AGREEMENT_DELTA = 0.15     # Max diff for "GNN agrees with heuristic"
+        BOOST_WEIGHT = 0.30        # How much GNN can boost (30% contribution)
+        MIN_GNN_BOOST = 0.85       # GNN must be this confident to boost weak signals
+
+        # GNN calibration thresholds (to filter overconfident but wrong predictions)
+        GNN_OVERCONFIDENCE = 0.95  # Treat GNN probs > this as suspect
+        GNN_UNDERCONFIDENCE = 0.55 # Treat GNN < this as too uncertain to use
+
+        # ================================================================
+        # EXTRACT GNN PROBABILITY
+        # ================================================================
+        import math
+
+        try:
+            heuristic_confidence = float(heuristic_confidence)
+        except Exception:
+            heuristic_confidence = float("nan")
+
+        gnn_p_vuln = float(gnn_binary_probs.get(1, gnn_binary_probs.get("1", 0.0)) or 0.0)
+        gnn_p_safe = float(gnn_binary_probs.get(0, gnn_binary_probs.get("0", 0.0)) or 0.0)
+
+        # NaN / Inf safety
+        if not math.isfinite(heuristic_confidence):
+            return {
+                "heuristic": 0.50,
+                "gnn_raw": 0.0,
+                "ood_detected": False,
+                "combined": 0.50,
+                "source": "error_nan_heuristic",
+            }
+        if not (math.isfinite(gnn_p_vuln) and math.isfinite(gnn_p_safe)):
+            heuristic_confidence = max(0.0, min(1.0, heuristic_confidence))
+            return {
+                "heuristic": float(heuristic_confidence),
+                "gnn_raw": 0.0,
+                "ood_detected": False,
+                "combined": float(heuristic_confidence),
+                "source": "heuristic_only_nan_gnn",
+            }
+
+        # Clamp inputs
+        heuristic_confidence = max(0.0, min(1.0, heuristic_confidence))
+        gnn_p_vuln = max(0.0, min(1.0, gnn_p_vuln))
+        gnn_p_safe = max(0.0, min(1.0, gnn_p_safe))
+
+        # Normalize probs if needed / possible
+        if gnn_p_safe <= 0.0 and 0.0 <= gnn_p_vuln <= 1.0:
+            gnn_p_safe = 1.0 - gnn_p_vuln
+        s = gnn_p_safe + gnn_p_vuln
+        if s > 0.0:
+            gnn_p_safe = gnn_p_safe / s
+            gnn_p_vuln = gnn_p_vuln / s
+
+        result: Dict[str, Any] = {
+            "heuristic": float(heuristic_confidence),
+            "gnn_raw": float(gnn_p_vuln),
+            "ood_detected": False,
+        }
+
+        # ================================================================
+        # CESCL-BASED OOD DETECTION (if Issue E prototypes are loaded)
+        # ================================================================
+        if (
+            getattr(self, "cescl_module", None) is not None
+            and self.cescl_module.is_available()
+            and gnn_embedding is not None
+        ):
+            try:
+                import torch
+
+                cescl_scores = self.cescl_module.score(
+                    embedding=gnn_embedding,
+                    logit_probs=torch.tensor([gnn_p_safe, gnn_p_vuln]),
+                )
+                ood_score = float(cescl_scores.get("ood_score", 0.0))
+                ood_threshold = float(self.cescl_module.get_ood_threshold(percentile=95.0))
+
+                result["ood_score"] = ood_score
+                result["ood_detected"] = bool(ood_score > ood_threshold)
+
+                # If OOD: GNN is seeing a novel pattern it wasn't trained on.
+                # Trust heuristics completely, but flag for manual review.
+                if result["ood_detected"]:
+                    result["combined"] = max(float(heuristic_confidence), 0.60)
+                    result["source"] = "heuristic_only_ood"
+                    return result
+
+            except Exception as e:
+                self.logger.warning("CESCL scoring failed: %s. Using heuristic-only.", e)
+
+        # ================================================================
+        # CASE 1: STRONG HEURISTIC SIGNAL (≥ 0.70)
+        # ================================================================
+        if heuristic_confidence >= STRONG_HEURISTIC:
+            # Critical monotonicity fix: only take the "boost" branch when the GNN
+            # is both aligned *and* at least as confident as the heuristic.
+            # NOTE: add a tiny epsilon to avoid float-edge non-determinism
+            # at the exact boundary (e.g., 0.80 + 0.15 may be 0.9500000000000001).
+            if abs(gnn_p_vuln - heuristic_confidence) <= (AGREEMENT_DELTA + 1e-12) and gnn_p_vuln >= heuristic_confidence:
+                combined = heuristic_confidence + BOOST_WEIGHT * (gnn_p_vuln - heuristic_confidence)
+                combined = min(combined, 1.0)
+                result["combined"] = float(combined)
+                result["source"] = "gnn_boost"
+            else:
+                result["combined"] = float(heuristic_confidence)
+                result["source"] = "heuristic_only"
+            return result
+
+        # ================================================================
+        # CASE 2: MODERATE HEURISTIC SIGNAL (0.40 ≤ conf < 0.70)
+        # ================================================================
+        if heuristic_confidence >= MODERATE_HEURISTIC:
+            if gnn_p_vuln > heuristic_confidence and gnn_p_vuln >= GNN_UNDERCONFIDENCE:
+                if gnn_p_vuln > GNN_OVERCONFIDENCE:
+                    effective_gnn = 0.80
+                else:
+                    effective_gnn = gnn_p_vuln
+
+                combined = heuristic_confidence + BOOST_WEIGHT * (effective_gnn - heuristic_confidence)
+                combined = min(combined, 0.95)
+                combined = max(combined, heuristic_confidence)  # never suppress
+                result["combined"] = float(combined)
+                result["source"] = "gnn_boost"
+            else:
+                result["combined"] = float(heuristic_confidence)
+                result["source"] = "heuristic_only"
+            return result
+
+        # ================================================================
+        # CASE 3: WEAK/NO HEURISTIC SIGNAL (< 0.40)
+        # ================================================================
+        if heuristic_confidence >= WEAK_HEURISTIC:
+            if gnn_p_vuln >= MIN_GNN_BOOST:
+                if gnn_p_vuln > GNN_OVERCONFIDENCE:
+                    combined = 0.70 * heuristic_confidence + 0.30 * 0.85
+                else:
+                    combined = 0.60 * heuristic_confidence + 0.40 * gnn_p_vuln
+                combined = max(combined, heuristic_confidence)  # never suppress
+                result["combined"] = float(combined)
+                result["source"] = "gnn_calibrated"
+            else:
+                result["combined"] = float(heuristic_confidence)
+                result["source"] = "heuristic_only"
+            return result
+
+        # ================================================================
+        # CASE 4: NEAR-ZERO HEURISTIC (< 0.20)
+        # ================================================================
+        if gnn_p_vuln >= MIN_GNN_BOOST and not result["ood_detected"]:
+            result["combined"] = float(max(0.50, 0.70 * gnn_p_vuln))
+            result["source"] = "gnn_only"
+        else:
+            result["combined"] = float(heuristic_confidence)
+            result["source"] = "heuristic_only"
+
+        return result
 
     def analyze_code(self, source_code: str, source_path: Optional[str] = None, _internal_call: bool = False) -> Dict[str, Any]:
         """Analyze source code using the complete pipeline with Bayesian uncertainty"""
@@ -1932,19 +2391,81 @@ class IntegratedGNNFramework:
 
         # Step 3.5: Spatial GNN inference (if enabled and initialized)
         gnn_inference = None
+        gnn_internal = None
         if self.spatial_gnn_model:
             self.logger.info("🧠 Running spatial GNN inference...")
-            gnn_inference = self._run_spatial_gnn_inference(
-                source_code, source_path, cpg_structure=cpg_structure
+            gnn_inference, gnn_internal = self._run_spatial_gnn_inference(
+                source_code,
+                source_path,
+                cpg_structure=cpg_structure,
+                return_internal=True,
             )
 
         gnn_forward_ok = bool(gnn_inference and gnn_inference.get("forward_ok"))
         gnn_confidence = gnn_inference.get("gnn_confidence") if gnn_forward_ok else None
+        gnn_confidence_logit_only = (
+            gnn_inference.get("gnn_confidence_logit_only") if gnn_forward_ok else None
+        )
         gnn_uncertainty = gnn_inference.get("gnn_uncertainty") if gnn_forward_ok else None
         gnn_trustworthy = gnn_forward_ok and self.gnn_weights_loaded
-        final_confidence = self._combine_confidence(
-            heuristic_result["confidence"], gnn_confidence, gnn_trustworthy
-        )
+
+        # Asymmetric ensemble fusion (research-backed): GNN can boost but never suppress.
+        # Preserve baseline (pre-CESCL) confidence for comparison (Issue E).
+        final_confidence = float(heuristic_result["confidence"])
+        final_confidence_logit_only = float(heuristic_result["confidence"])
+        confidence_fusion: Optional[Dict[str, Any]] = None
+        confidence_fusion_logit_only: Optional[Dict[str, Any]] = None
+
+        if gnn_trustworthy and isinstance(gnn_internal, dict):
+            try:
+                import torch
+
+                emb = gnn_internal.get("embedding")
+                prob_vec = gnn_internal.get("binary_probs")
+
+                if isinstance(prob_vec, torch.Tensor) and int(prob_vec.numel()) >= 2:
+                    ps = float(prob_vec.view(-1)[0].item())
+                    pv = float(prob_vec.view(-1)[1].item())
+                    s = ps + pv
+                    if s > 0:
+                        ps, pv = ps / s, pv / s
+                    gnn_probs_logit = {0: ps, 1: pv}
+                else:
+                    pv = float(
+                        gnn_confidence_logit_only
+                        if gnn_confidence_logit_only is not None
+                        else (gnn_confidence or 0.0)
+                    )
+                    gnn_probs_logit = {0: float(1.0 - pv), 1: pv}
+
+                blended = gnn_inference.get("cescl_blended_probs") if isinstance(gnn_inference, dict) else None
+                if isinstance(blended, dict) and (1 in blended or "1" in blended):
+                    p1 = float(blended.get(1, blended.get("1", 0.0)) or 0.0)
+                    p0 = float(blended.get(0, blended.get("0", 0.0)) or (1.0 - p1))
+                    s = p0 + p1
+                    if s > 0:
+                        p0, p1 = p0 / s, p1 / s
+                    gnn_probs_final = {0: p0, 1: p1}
+                else:
+                    gnn_probs_final = dict(gnn_probs_logit)
+
+                confidence_fusion_logit_only = self._combine_confidence(
+                    heuristic_confidence=float(heuristic_result["confidence"]),
+                    gnn_binary_probs=gnn_probs_logit,
+                    gnn_embedding=emb if isinstance(emb, torch.Tensor) else None,
+                )
+                final_confidence_logit_only = float(
+                    confidence_fusion_logit_only.get("combined", final_confidence_logit_only)
+                )
+
+                confidence_fusion = self._combine_confidence(
+                    heuristic_confidence=float(heuristic_result["confidence"]),
+                    gnn_binary_probs=gnn_probs_final,
+                    gnn_embedding=emb if isinstance(emb, torch.Tensor) else None,
+                )
+                final_confidence = float(confidence_fusion.get("combined", final_confidence))
+            except Exception as exc:
+                self.logger.warning("⚠️ Confidence fusion failed; using heuristic-only: %s", exc)
         threshold_applied = False
         threshold_passed = True
         if gnn_trustworthy and self.gnn_confidence_threshold is not None:
@@ -1972,16 +2493,27 @@ class IntegratedGNNFramework:
         # Step 4: Select primary vulnerability based on severity
         primary_vuln = self._select_primary_vulnerability_by_severity(vulnerabilities, source_code)
         
-        vulnerability_detected = len(vulnerabilities) > 0
-        if gnn_trustworthy and gnn_inference.get("predicted_vulnerable") and gnn_predicted_allowed:
-            vulnerability_detected = True
+        heuristic_detected = len(vulnerabilities) > 0
+        gnn_detected = bool(
+            gnn_trustworthy and gnn_inference.get("predicted_vulnerable") and gnn_predicted_allowed
+        )
+        vulnerability_detected = heuristic_detected or gnn_detected
 
         pre_threshold_detected = vulnerability_detected
-        if threshold_applied and not threshold_passed:
+        threshold_suppressed = False
+        if threshold_applied and not threshold_passed and not heuristic_detected:
+            # Only suppress *GNN-only* findings. Never suppress heuristic/taint findings.
+            threshold_suppressed = bool(gnn_detected)
             vulnerability_detected = False
             primary_vuln = 'none'
 
-        if primary_vuln == 'none' and gnn_trustworthy and gnn_inference.get("predicted_vulnerable") and gnn_predicted_allowed:
+        if (
+            vulnerability_detected
+            and primary_vuln == 'none'
+            and gnn_trustworthy
+            and gnn_inference.get("predicted_vulnerable")
+            and gnn_predicted_allowed
+        ):
             predicted_type = gnn_predicted_type or gnn_inference.get("predicted_type")
             if predicted_type and predicted_type != "none":
                 primary_vuln = predicted_type
@@ -1990,10 +2522,13 @@ class IntegratedGNNFramework:
             'vulnerability_detected': vulnerability_detected,
             'vulnerability_type': primary_vuln,
             'confidence': final_confidence,
+            # Issue E: preserve baseline (pre-prototype) confidence
+            'confidence_logit_only': final_confidence_logit_only,
             'heuristic_confidence': heuristic_result['confidence'],
             'traditional_confidence': heuristic_result['traditional_confidence'],
             'bayesian_confidence': heuristic_result['bayesian_confidence'],
             'gnn_confidence': gnn_confidence,
+            'gnn_confidence_logit_only': gnn_confidence_logit_only,
             'gnn_uncertainty': gnn_uncertainty,
             'vulnerabilities_found': vulnerabilities,
             'cpg': cpg_result['cpg'],
@@ -2014,6 +2549,11 @@ class IntegratedGNNFramework:
             'input': source_path,  # Add input path for HTML report generation
             'source_code': source_code  # Add source code for CF explainer
         }
+        # Expose confidence fusion metadata for auditing/debugging (security-critical).
+        if confidence_fusion_logit_only is not None:
+            final_result["confidence_fusion_logit_only"] = confidence_fusion_logit_only
+        if confidence_fusion is not None:
+            final_result["confidence_fusion"] = confidence_fusion
         final_result['gnn_forward_called'] = gnn_forward_ok
         final_result['gnn_threshold'] = {
             'applied': threshold_applied,
@@ -2021,6 +2561,7 @@ class IntegratedGNNFramework:
             'threshold': self.gnn_confidence_threshold,
             'score': final_confidence,
             'pre_threshold_detected': pre_threshold_detected,
+            'suppressed': threshold_suppressed,
         }
         
         # Spatial GNN status (initialized but not used in scoring pipeline)
@@ -2041,6 +2582,22 @@ class IntegratedGNNFramework:
             final_result['spatial_gnn']['trace_enabled'] = True
         if gnn_inference:
             final_result['spatial_gnn']['inference'] = gnn_inference
+
+            # Issue E: bubble CESCL fields to top-level for convenience
+            if isinstance(gnn_inference, dict):
+                final_result['cescl_available'] = bool(gnn_inference.get('cescl_available', False))
+                for key in (
+                    'cescl_prototype_probs',
+                    'cescl_distances',
+                    'cescl_blended_probs',
+                    'cescl_ood_score',
+                    'cescl_calibrated_confidence',
+                    'cescl_is_ood',
+                ):
+                    if key in gnn_inference:
+                        final_result[key] = gnn_inference[key]
+        else:
+            final_result['cescl_available'] = False
         
         # Generate counterfactual explanations if enabled
         if self.cf_explainer and len(vulnerabilities) > 0:

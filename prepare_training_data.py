@@ -67,6 +67,12 @@ def _build_joern_env() -> Dict[str, str]:
         env["JAVA_TOOL_OPTIONS"] = (java_opts + " " if java_opts else "") + "-Dfile.encoding=UTF-8"
     env.setdefault("LC_ALL", "en_US.UTF-8")
     env.setdefault("LANG", "en_US.UTF-8")
+    # macOS: Homebrew often sets DYLD_LIBRARY_PATH which can break Joern/Java native
+    # linking (e.g., `java.util.zip.Inflater.initIDs()` UnsatisfiedLinkError).
+    # Joern should run with a clean dynamic library search path.
+    env.pop("DYLD_LIBRARY_PATH", None)
+    env.pop("DYLD_FALLBACK_LIBRARY_PATH", None)
+    env.pop("DYLD_INSERT_LIBRARIES", None)
     return env
 
 

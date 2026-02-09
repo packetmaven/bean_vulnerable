@@ -487,6 +487,12 @@ class ComprehensiveTaintTracker:
     def _propagate_taint(self, lines: List[str]):
         """Propagate taint through assignments, method calls, and operations"""
         for i, line in enumerate(lines, 1):
+            stripped = line.strip()
+            # Skip package/import lines: they contain dotted package paths that can
+            # look like field accesses to regex-based alias tracking.
+            if stripped.startswith("import ") or stripped.startswith("package "):
+                continue
+
             # Handle allocations (for alias analysis integration)
             # Pattern 1: new ClassName()
             allocations = re.findall(r'(\w+)\s*=\s*new\s+([\w.]+)(?:\[\]|\[[^\]]*\]|\()', line)
@@ -604,6 +610,10 @@ class ComprehensiveTaintTracker:
     def _detect_tainted_fields(self, lines: List[str]):
         """Detect fields that receive tainted data"""
         for i, line in enumerate(lines, 1):
+            stripped = line.strip()
+            if stripped.startswith("import ") or stripped.startswith("package "):
+                continue
+
             # Pattern: obj.field = taintedVar or obj.setField(taintedVar)
             field_assigns = re.findall(r'(\w+)\.(\w+)\s*=\s*([^;]+)', line)
             for obj, field_name, rhs in field_assigns:
