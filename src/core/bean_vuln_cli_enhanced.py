@@ -166,12 +166,29 @@ def _prepare_report_dir(report_dir: Path) -> Path:
 
     marker = resolved / REPORT_DIR_MARKER
     if resolved.exists():
+        if not resolved.is_dir():
+            raise ValueError(f"Report directory path exists but is not a directory: {resolved}")
         if not marker.exists():
-            raise ValueError(
-                f"Refusing to delete existing directory without marker: {resolved}. "
-                f"Create a dedicated report dir or add {REPORT_DIR_MARKER} to allow cleanup."
+            # Safe fallback: never delete a directory we didn't create.
+            # Instead, write into a new, unique sibling directory.
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            candidate = resolved.with_name(f"{resolved.name}_{ts}")
+            counter = 1
+            while candidate.exists():
+                candidate = resolved.with_name(f"{resolved.name}_{ts}_{counter}")
+                counter += 1
+            LOG.warning(
+                "Report directory exists without marker (%s). "
+                "Using a new directory instead: %s. "
+                "If you want automatic cleanup, create %s inside the original directory.",
+                resolved,
+                candidate,
+                REPORT_DIR_MARKER,
             )
-        shutil.rmtree(resolved)
+            resolved = candidate
+            marker = resolved / REPORT_DIR_MARKER
+        else:
+            shutil.rmtree(resolved)
 
     resolved.mkdir(parents=True, exist_ok=True)
     marker.write_text("Bean Vulnerable report directory marker.\n", encoding="utf-8")
@@ -1556,6 +1573,9 @@ def main():
     if args.html_report and (args.export_dfg or args.export_cfg or args.export_pdg) and args.input:
         try:
             report_dir = _prepare_report_dir(Path(args.html_report))
+            # Ensure later steps (HTML report, auto-open, etc.) use the resolved directory
+            # returned by `_prepare_report_dir` (may differ if we had to fall back).
+            args.html_report = str(report_dir)
         except ValueError as exc:
             LOG.error(str(exc))
             sys.exit(2)
