@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
-
 def _import_report_generator():
     try:
         from src.core.html_report_generator import generate_comprehensive_html_report  # type: ignore
