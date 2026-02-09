@@ -177,6 +177,26 @@ def _prepare_report_dir(report_dir: Path) -> Path:
     marker.write_text("Bean Vulnerable report directory marker.\n", encoding="utf-8")
     return resolved
 
+def _build_joern_env() -> Dict[str, str]:
+    """
+    Build a robust environment for invoking Joern on macOS.
+
+    Why this exists:
+    - Some shells/tools export DYLD_* variables that can break Java native linking
+      when Joern starts (e.g. `java.util.zip.Inflater.initIDs()` UnsatisfiedLinkError).
+    - Ensure UTF-8 encoding to avoid MalformedInputException on Joern/Java output.
+    """
+    env: Dict[str, str] = dict(os.environ)
+    java_opts = env.get("JAVA_TOOL_OPTIONS", "")
+    if "-Dfile.encoding=UTF-8" not in java_opts:
+        env["JAVA_TOOL_OPTIONS"] = (java_opts + " " if java_opts else "") + "-Dfile.encoding=UTF-8"
+    env.setdefault("LC_ALL", "en_US.UTF-8")
+    env.setdefault("LANG", "en_US.UTF-8")
+    env.pop("DYLD_LIBRARY_PATH", None)
+    env.pop("DYLD_FALLBACK_LIBRARY_PATH", None)
+    env.pop("DYLD_INSERT_LIBRARIES", None)
+    return env
+
 # Import enhanced framework components
 try:
     from src.core.integrated_gnn_framework import IntegratedGNNFramework
@@ -1548,7 +1568,7 @@ def main():
             try:
                 # Use the COMPREHENSIVE Joern script for detailed graphs
                 script_path = Path(__file__).parent.parent.parent / "comprehensive_graphs.sc"
-                env = os.environ.copy()
+                env = _build_joern_env()
                 env['SOURCE_FILE'] = str(source_path.absolute())
                 env['OUTPUT_DIR'] = str(report_dir.absolute())
                 
@@ -1569,6 +1589,11 @@ def main():
                     LOG.debug(f"Joern output: {graph_result.stdout}")
                 if graph_result.stderr:
                     LOG.warning(f"Joern warnings: {graph_result.stderr}")
+                if graph_result.returncode != 0:
+                    raise RuntimeError(
+                        f"Joern graph generation failed (exit {graph_result.returncode}). "
+                        "See warnings above."
+                    )
                 
                 # Convert ALL .dot files to PNG and SVG
                 dot_files = list(report_dir.glob('*.dot'))
