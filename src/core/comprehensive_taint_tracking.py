@@ -905,18 +905,19 @@ class ComprehensiveTaintTracker:
             if not tainted_in_line:
                 continue
             for sink_token, vuln_type in self.SINK_METHOD_TO_VULN.items():
-                if sink_token in line:
-                    sink_node = f"Sink:{sink_token}"
-                    for var in tainted_in_line:
-                        self._record_taint_edge(
-                            source=var,
-                            target=sink_node,
-                            line_number=i,
-                            kind="sink",
-                            reason=f"sink:{sink_token}",
-                            vuln_types=[vuln_type],
-                            target_role="sink",
-                        )
+                if not re.search(rf'\b{re.escape(sink_token)}\b', line):
+                    continue
+                sink_node = f"Sink:{sink_token}"
+                for var in tainted_in_line:
+                    self._record_taint_edge(
+                        source=var,
+                        target=sink_node,
+                        line_number=i,
+                        kind="sink",
+                        reason=f"sink:{sink_token}",
+                        vuln_types=[vuln_type],
+                        target_role="sink",
+                    )
             
     def _perform_alias_refinement(self):
         """Perform iterative alias refinement (PLDI 2024)"""
