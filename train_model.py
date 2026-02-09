@@ -379,6 +379,9 @@ def main():
         "num_vulnerability_types": 24,
         "num_edge_types": inferred_num_edge_types,
         "num_layers": 3,
+        # Training defaults: keep the model lightweight + avoid HF downloads.
+        # You can re-enable later if you also pass node_tokens through the trainer.
+        "use_codebert": False,
         "use_hierarchical_pooling": True,
     }
 

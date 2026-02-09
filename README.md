@@ -627,12 +627,25 @@ python -m pip install -e ".[gnn]"
 python -c "import torch, torch_geometric; print('torch', torch.__version__, 'pyg', torch_geometric.__version__)"
 
 # --- prepare training data (uses Joern; requires `joern` on PATH and Java 11+) ---
+# NOTE (macOS/Homebrew): prefer the venv `python` (not system `python3`).
+python -c "import sys; print('python:', sys.executable)"
+
 rm -rf training_data
-python prepare_training_data.py --input tests/samples --output training_data --train-split 0.7 --val-split 0.15 --test-split 0.15
+
+# Option A: bundled samples (directory mode)
+python prepare_training_data.py --dataset dir --input tests/samples --output training_data/samples \
+  --train-split 0.7 --val-split 0.15 --test-split 0.15
+
+# Option B: Vul4J (real CVEs; clones upstream repos + caches under .cache/vul4j_repos)
+python prepare_training_data.py --dataset vul4j --output training_data/vul4j \
+  --vul4j-limit-vulns 50 --vul4j-max-files-per-vuln 2
+
+# Pick one prepared dataset directory:
+DATA_DIR="training_data/vul4j"   # or: training_data/samples
 
 # --- train + save checkpoints ---
 rm -rf models/spatial_gnn
-python train_model.py --data training_data --output models/spatial_gnn --epochs 100 --batch-size 32 --lr 0.001 --device auto
+python train_model.py --data "$DATA_DIR" --output models/spatial_gnn --epochs 100 --batch-size 32 --lr 0.001 --device auto
 
 # (Default) training runs calibration monitoring + confidence fusion validation.
 # Outputs (next to checkpoints):
@@ -644,7 +657,7 @@ python train_model.py --data training_data --output models/spatial_gnn --epochs 
 ls -lah models/spatial_gnn/best_model.pt
 
 # --- extract CESCL prototypes and inject into the checkpoint (single-file deployment) ---
-python -m src.core.prototype_extractor --checkpoint models/spatial_gnn/best_model.pt --data training_data
+python -m src.core.prototype_extractor --checkpoint models/spatial_gnn/best_model.pt --data "$DATA_DIR"
 ```
 
 ### Train the Spatial GNN (better defaults / less unstable)

@@ -5,6 +5,7 @@ import pytest
 
 def test_ipag_compression_preserves_edge_type_alignment():
     torch = pytest.importorskip("torch")
+    pytest.importorskip("torch_geometric")
 
     try:
         from src.core.spatial_gnn_enhanced import EdgeType, InterProceduralAbstractGraph  # type: ignore

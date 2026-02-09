@@ -278,6 +278,33 @@ class SpatialGNNTrainer(CalibrationMixin):
             "cescl_cluster": cescl_cluster,
         }
 
+    def _extract_node_tokens(self, batch) -> Optional[list[str]]:
+        """
+        Best-effort extraction of per-node token strings from a PyG batch.
+
+        - Single-graph Data objects may store `node_tokens: List[str]`
+        - Batched graphs may appear as a concatenated list[str] OR a list[list[str]]
+        """
+        tokens = getattr(batch, "node_tokens", None)
+        if tokens is None:
+            return None
+        if isinstance(tokens, str):
+            return [tokens]
+        if isinstance(tokens, (list, tuple)):
+            if not tokens:
+                return None
+            first = tokens[0]
+            if isinstance(first, (list, tuple)):
+                flat: list[str] = []
+                for item in tokens:
+                    if isinstance(item, (list, tuple)):
+                        flat.extend([str(t) for t in item])
+                    else:
+                        flat.append(str(item))
+                return flat
+            return [str(t) for t in tokens]
+        return None
+
     # --------------------------------------------------------------- train
     def train_epoch(self, train_loader: DataLoader) -> Dict[str, float]:
         """
@@ -302,11 +329,13 @@ class SpatialGNNTrainer(CalibrationMixin):
             batch = batch.to(self.device)
 
             self.optimizer.zero_grad()
+            node_tokens = self._extract_node_tokens(batch)
             outputs = self.model(
                 x=batch.x,
                 edge_index=batch.edge_index,
                 edge_type=batch.edge_type,
                 batch=batch.batch,
+                node_tokens=node_tokens,
             )
 
             # Issue B: Use shared _compute_all_losses
@@ -373,11 +402,13 @@ class SpatialGNNTrainer(CalibrationMixin):
             for batch in tqdm(val_loader, desc="Validating"):
                 batch = batch.to(self.device)
 
+                node_tokens = self._extract_node_tokens(batch)
                 outputs = self.model(
                     x=batch.x,
                     edge_index=batch.edge_index,
                     edge_type=batch.edge_type,
                     batch=batch.batch,
+                    node_tokens=node_tokens,
                 )
 
                 # Issue B: SAME loss computation as train_epoch
