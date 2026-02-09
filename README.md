@@ -24,6 +24,7 @@ A vulnerability analysis framework with experimental GNN modules; heuristic scor
 - [📚 Research Foundations](#-research-foundations)
 - [🧪 Reproducibility and Evaluation](#-reproducibility-and-evaluation)
 - [🔁 Common Workflows](#-common-workflows)
+- [🔬 Vulnerability Discovery Playbook (Research Workflow)](#-vulnerability-discovery-playbook-research-workflow)
 - [📸 Example Outputs](#-example-outputs)
   - [Tainted Variables Detection](#tainted-variables-detection)
   - [Alias Analysis Results](#alias-analysis-results)
@@ -45,6 +46,7 @@ A vulnerability analysis framework with experimental GNN modules; heuristic scor
 - [🎯 Interpreting Confidence Scores](#-interpreting-confidence-scores)
 - [🛡️ Security Practitioner Usage](#️-security-practitioner-usage)
 - [🧪 Testing and Validation](#-testing-and-validation)
+- [🧪 Calibration & Confidence Safety Gates (New)](#-calibration--confidence-safety-gates-new)
 - [🏗️ Architecture Overview](#️-architecture-overview)
 - [📊 Performance Benchmarks](#-performance-benchmarks)
 - [📊 Current vs Future Capabilities](#-current-vs-future-capabilities)
@@ -63,6 +65,7 @@ The Bean Vulnerable framework combines the following cutting-edge technologies:
 - **Graph Neural Network modules** (inference runs; trained weights required for GNN-weighted scoring)
 - **Pattern-based detection (current release)** with heuristic scoring; trained GNN inference is supported via checkpoints
 - **CESCL (Cluster-Enhanced Sup-Con Loss)** for improved 0-day discovery
+- **Calibration + safety gates**: ECE calibration reports + confidence-fusion monotonicity tests
 - **Dataset-Map + Active Learning** for intelligent data quality management
 - **Counterfactual Explainers** for minimal-change security fix recommendations
 - **Bayesian Uncertainty** for confidence-aware predictions
@@ -77,6 +80,11 @@ bean-vuln tests/samples/VUL001_SQLInjection_Basic.java --html-report output --su
 
 # Deep audit (advanced taint + richer evidence)
 bean-vuln2 tests/samples/VUL001_SQLInjection_Basic.java --comprehensive --html-report output --summary
+
+# Trained GNN + CESCL prototypes (requires checkpoint; fail fast if not available)
+bean-vuln tests/samples/VUL006_XSS_ServletResponse.java \
+  --gnn-checkpoint models/spatial_gnn/best_model.pt --require-gnn \
+  --html-report output --summary
 ```
 
 Notes:
@@ -277,6 +285,74 @@ bean-vuln tests/samples/VUL006_XSS_ServletResponse.java \
 # Regression sweep
 for file in tests/samples/VUL*.java; do bean-vuln "$file" --summary; done
 ```
+
+## 🔬 Vulnerability Discovery Playbook (Research Workflow)
+
+This is the **practical, repeatable workflow** we use to turn the framework into high-signal vulnerability discoveries and research artifacts.
+It is optimized for **authorized security testing** and **controlled reproduction**.
+
+### 1) Triage sweep (fast, high recall)
+
+Run a directory scan to surface candidate files quickly:
+
+```bash
+# Fast heuristic scan with a per-file summary (directory output is dataset-style JSON)
+bean-vuln path/to/src --recursive --summary --out triage.json
+```
+
+What to look for in `triage.json`:
+- **`vulnerability_detected` + `vulnerabilities_found`**: candidate vulnerability classes.
+- **`evidence.*`**: sink hits, taint flows, sanitizer hits, gating decisions.
+- **`cpg`**: nodes/edges/methods/calls (a sanity check that Joern parsed meaningful structure).
+
+### 2) Promote a candidate to an HTML “case file”
+
+Pick the highest-signal file and generate an HTML report (graphs + flows + evidence):
+
+```bash
+bean-vuln path/to/file.java --html-report report_dir --summary --out case.json
+```
+
+In the HTML report, focus on:
+- **Findings**: verdict + confidence + Joern reachableByFlows totals.
+- **Sink-Specific Gating**: which sinks were kept/dropped and why.
+- **DFG Paths**: textual taint flow evidence you can grep/quote in research notes.
+- **Graphs (CFG/DFG/PDG)**: per-method views to localize exploitable dataflow.
+
+### 3) Escalate to deep audit (maximize evidence)
+
+If the target is framework-heavy or the flow is subtle, rerun with the enhanced CLI:
+
+```bash
+bean-vuln2 path/to/file.java --comprehensive --html-report report_dir --summary --out deep_case.json
+```
+
+Then (optional) enable Tai-e when aliasing/polymorphism makes heuristics noisy:
+
+```bash
+bean-vuln path/to/file.java --tai-e --tai-e-home "$TAI_E_HOME" --tai-e-cs 1-obj --summary --html-report report_dir
+```
+
+### 4) (Optional) Add trained GNN + CESCL prototypes for prioritization
+
+Use this when you want the framework to generalize across variants and help you rank novel findings.
+
+High-level flow:
+1. Prepare training graphs with Joern (`prepare_training_data.py`)
+2. Train with class-weights + PK sampling (`train_model.py`)
+3. Extract CESCL prototypes and inject into the checkpoint (`prototype_extractor.py`)
+4. Run inference with `--gnn-checkpoint` and enforce hard dependency with `--require-gnn`
+
+Key research signals:
+- **`cescl_is_ood`**: flags patterns far from all training prototypes (high manual-review value).
+- **Confidence fusion invariants**: the GNN can **boost** confidence but must **never suppress** heuristic detections (see `confidence_fusion.source`).
+
+### 5) Turn a finding into a research artifact
+
+For each confirmed issue:
+- Save the **HTML report** and **JSON case file** as evidence.
+- Add a **minimal reproducer** Java sample (or a reduced method) to your internal corpus.
+- Add a regression check in CI (e.g., CLI run + assertion on `vulnerability_detected`).
 
 ## 📸 **Example Outputs**
 
@@ -558,8 +634,17 @@ python prepare_training_data.py --input tests/samples --output training_data --t
 rm -rf models/spatial_gnn
 python train_model.py --data training_data --output models/spatial_gnn --epochs 100 --batch-size 32 --lr 0.001 --device auto
 
+# (Default) training runs calibration monitoring + confidence fusion validation.
+# Outputs (next to checkpoints):
+#   models/spatial_gnn/calibration_report.json
+#   models/spatial_gnn/test_results.json
+# Disable if needed (not recommended): --no-calibration
+
 # --- your checkpoint to use with the CLI ---
 ls -lah models/spatial_gnn/best_model.pt
+
+# --- extract CESCL prototypes and inject into the checkpoint (single-file deployment) ---
+python -m src.core.prototype_extractor --checkpoint models/spatial_gnn/best_model.pt --data training_data
 ```
 
 ### Train the Spatial GNN (better defaults / less unstable)
@@ -1272,6 +1357,32 @@ pip install -e .
 }
 ```
 
+**GNN + CESCL + fusion additions (when `--gnn-checkpoint` is provided and weights load):**
+
+```json
+{
+  "confidence": 0.8603,
+  "confidence_logit_only": 0.8603,
+  "heuristic_confidence": 0.8603,
+  "gnn_confidence": 0.1887,
+  "gnn_confidence_logit_only": 0.0578,
+  "confidence_fusion": {
+    "combined": 0.8603,
+    "source": "heuristic_only",
+    "heuristic": 0.8603,
+    "gnn_raw": 0.1887,
+    "ood_detected": false
+  },
+  "cescl_available": true,
+  "cescl_prototype_probs": { "0": 0.5060, "1": 0.4940 },
+  "cescl_distances": { "0": 0.0012, "1": 0.0029 },
+  "cescl_blended_probs": { "0": 0.8113, "1": 0.1887 },
+  "cescl_ood_score": 0.9749,
+  "cescl_calibrated_confidence": 0.2689,
+  "cescl_is_ood": false
+}
+```
+
 **Advanced taint summary snippet**
 ```json
 "advanced_taint": {
@@ -1284,16 +1395,21 @@ This same summary appears in the HTML report under **Findings → Advanced Taint
 
 **Field guide**
 - `vulnerability_detected`, `vulnerability_type`, `confidence`: primary verdict.
+- `confidence_logit_only`: combined confidence before CESCL prototype blending (useful for A/B comparisons).
 - `cpg`: CPG summary from Joern.
 - `taint_tracking`: tainted vars, sanitizer analysis, implicit/path/native stats.
 - `advanced_taint`: condensed counters for implicit/path/JNI/context/interprocedural.
 - `joern_dataflow`: reachableByFlows metrics (when enabled).
 - `aeg_lite_java`: PoCs and patches from the Java analyzer.
 - `analysis_config`: run metadata (e.g., requested sink preset).
+- `confidence_fusion`: security-critical fusion metadata (`source`, `gnn_raw`, `ood_detected`).
+- `gnn_confidence_logit_only`: temperature-scaled logit probability \(P(vuln)\) prior to CESCL blending.
+- `cescl_*`: prototype probabilities/distances, OOD score, and calibrated confidence (when prototypes are present in the checkpoint).
 
 ### HTML to JSON Mapping
 
 - **Findings** → `vulnerability_detected`, `vulnerability_type`, `confidence`
+- **Confidence breakdown** → `confidence_fusion*`, `confidence_logit_only`, `gnn_confidence_logit_only`, `cescl_*`
 - **Joern Flows** → `joern_dataflow.flows_by_sink`
 - **Advanced Taint Analysis** → `taint_tracking.*` (implicit/path/native/interprocedural)
 - **Advanced Taint Summary** → `advanced_taint` (condensed counters)
@@ -1310,7 +1426,21 @@ This same summary appears in the HTML report under **Findings → Advanced Taint
 
 ## 🎯 Interpreting Confidence Scores
 
-### Final Weighted Confidence
+### Current (Asymmetric Fusion + CESCL prototypes)
+
+When a trained checkpoint is provided (`--gnn-checkpoint`) and weights load successfully, the framework uses an **asymmetric fusion policy** designed for security scanning:
+
+- **Security invariant (must hold):** if the heuristics indicate vulnerability with confidence \(h\) (in practice \(h \ge 0.20\)), then the fused confidence is **never allowed** to drop below \(h\). This prevents “close but lower” GNN outputs from suppressing true positives.
+- **Audit the decision:** see `confidence_fusion.source`:
+  - `heuristic_only`: heuristics dominated (GNN disagreed or was too weak to change the verdict)
+  - `gnn_boost`: aligned GNN boosted confidence (bounded boost)
+  - `gnn_calibrated`: weak heuristic + very confident GNN (cautious boost)
+  - `gnn_only`: near-zero heuristic + very confident GNN (still bounded)
+  - `heuristic_only_ood`: CESCL flagged out-of-distribution; heuristics used as safety fallback
+- **CESCL OOD signal:** when prototypes are present in the checkpoint, `cescl_is_ood` and `cescl_ood_score` highlight embeddings far from all training centroids. These are **high-value manual review targets** for novel vulnerability patterns.
+- **Calibration:** training produces `calibration_report.json` (ECE/MCE/adaptive ECE + security-weighted ECE). Use it to detect overconfidence drift.
+
+### Legacy (kept for historical reference): Final Weighted Confidence
 
 Base heuristic confidence combines Bayesian and traditional approaches:
 
@@ -1319,15 +1449,19 @@ Base heuristic confidence combines Bayesian and traditional approaches:
 When spatial GNN inference runs **and** trained weights are loaded, the final
 confidence blends heuristic + GNN:
 
-- **GNN blend (trained weights only)**: `0.5 * Heuristic + 0.5 * GNN`
+- **Legacy GNN blend (pre-asymmetric fusion)**: `0.5 * Heuristic + 0.5 * GNN`
 - **0.8+**: High confidence, proceed with remediation
 - **0.6-0.8**: Good confidence, validate findings  
 - **0.4-0.6**: Moderate confidence, manual review recommended
 - **< 0.4**: Low confidence, likely false positive
 
-**Calibration status:** Heuristic only. No empirical calibration set is bundled yet; use uncertainty metrics for manual triage.
+**Legacy note (pre-2026-02):** Heuristic only. No empirical calibration set is bundled yet; use uncertainty metrics for manual triage.
 
-**Note:** CESCL loss is available for future GNN training but not currently integrated into the confidence scoring pipeline. See "Future Enhancements" section for planned CESCL integration.
+**Current:** `train_model.py` runs calibration monitoring by default and writes `models/spatial_gnn/calibration_report.json`. You can also run `compute_ece.py` on prediction JSON that includes `ground_truth` labels.
+
+**Legacy note (pre-prototype inference):** CESCL loss was available for training but not integrated into confidence scoring.
+
+**Current:** CESCL prototype-based inference is integrated when prototypes are injected into the checkpoint (see `prototype_extractor.py`). Inference then populates `cescl_*` fields and can blend logit probabilities with prototype probabilities.
 
 ### Exploitability Scores (CVSS-like 0.0-10.0)
 - **9.0-10.0**: Critical - Immediate action required
@@ -1387,6 +1521,56 @@ for file in tests/samples/VUL*.java; do
   bean-vuln "$file" --summary
 done
 ```
+
+## 🧪 Calibration & Confidence Safety Gates (New)
+
+Security scanners fail in the real world when they become **overconfident** or when an ensemble suppresses a true positive.
+This repo includes two concrete safeguards:
+
+### 1) Confidence fusion invariant gate (must-pass)
+
+The asymmetric fusion policy is security-first:
+- The GNN is allowed to **boost** vulnerability confidence.
+- The GNN is **not allowed** to pull a heuristic vulnerability below the heuristic baseline.
+
+Run the full fusion test suite:
+
+```bash
+python -m pytest tests/test_combine_confidence.py -v
+```
+
+This includes monotonicity sweeps and randomized property tests that catch regressions like:
+`h=0.80, g=0.70` (close agreement) incorrectly reducing combined confidence.
+
+### 2) Calibration analysis (ECE + security-weighted ECE)
+
+Calibration answers: “when the model says 0.9, is it right ~90% of the time?”
+
+- **Training-time**: `train_model.py` runs lightweight calibration checks during training and writes a post-training report next to checkpoints.
+  - Output: `models/spatial_gnn/calibration_report.json`
+  - Configure: `--calibration-check-every N`, `--calibration-threshold 0.10`, or disable with `--no-calibration` (not recommended).
+- **Standalone**: analyze any predictions JSON that includes `ground_truth` labels:
+
+```bash
+python compute_ece.py --predictions val_results.json --n-bins 15 --output calibration_report.json
+```
+
+Expected format (list-of-dicts is easiest):
+
+```json
+[
+  { "confidence": 0.85, "ground_truth": 1, "graph_nodes": 120 },
+  { "confidence": 0.12, "ground_truth": 0, "graph_nodes": 45 }
+]
+```
+
+### 3) HTML report confidence breakdown (auditability)
+
+When you generate an HTML report, the **Findings** section includes a “Confidence breakdown” panel showing:
+- heuristic confidence
+- GNN confidence (logit-only vs CESCL-blended when available)
+- CESCL OOD score + `cescl_is_ood`
+- fusion source (`confidence_fusion.source`) and OOD detection (`confidence_fusion.ood_detected`)
 
 ### Local Dynamic Engine Verification (JPF-SPF / JDart / JBSE)
 These engines require **Java 8** and native Z3 Java bindings.
@@ -1668,7 +1852,7 @@ The following table distinguishes **current** capabilities from **future** work.
 | Feature | Current Status | Future Enhancement |
 |---------|---------------|-------------------|
 | **Vulnerability Detection** | ✅ Pattern-based heuristic + optional GNN inference | 🔮 ML‑trained models + calibrated scoring |
-| **Confidence Scoring** | ✅ Heuristic + Bayesian; GNN blended only with checkpoints | 🔮 CESCL integration + improved calibration |
+| **Confidence Scoring** | ✅ Heuristic + Bayesian; asymmetric fusion with trained checkpoints; CESCL prototype scoring when prototypes are present | 🔮 Temperature scaling / isotonic calibration + broader prototype coverage |
 | **Taint Tracking** | ✅ Heuristic taint sources/flows + sanitizers + sink gating | 🔮 Deeper path feasibility + runtime validation |
 | **Alias Analysis** | ✅ Heuristic field sensitivity; Tai‑e optional | 🔮 More summaries, tuning, performance |
 | **Tai‑e Object‑Sensitive** | ✅ Optional (requires Tai‑e JAR) | 🔮 Broader library summaries + tuning |
@@ -1755,7 +1939,9 @@ Notes:
 
 - **Zero-Day Discovery**: CESCL loss enables detection of vulnerability variants never seen before by tightening cluster boundaries
 
-- **CESCL Integration**: Will be integrated into confidence scoring: `0.4 * CESCL + 0.4 * Bayesian + 0.2 * Traditional`
+- **CESCL Integration (implemented)**: Prototype-based inference is integrated via `prototype_extractor.py` + `cescl_inference.py` and appears as `cescl_*` fields during inference when prototypes are present in the checkpoint.
+
+  - **Legacy planned blend (kept for reference):** `0.4 * CESCL + 0.4 * Bayesian + 0.2 * Traditional`
 
 **Training Infrastructure:**
 
