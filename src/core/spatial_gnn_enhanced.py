@@ -519,9 +519,19 @@ class InterProceduralAbstractGraph(nn.Module):
         
         return x
     
-    def forward(self, x: torch.Tensor, edge_index: torch.Tensor,
-                edge_type: torch.Tensor, batch: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Process IPAG with compression and enhancement"""
+    def forward(
+        self,
+        x: torch.Tensor,
+        edge_index: torch.Tensor,
+        edge_type: torch.Tensor,
+        batch: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Process IPAG with optional graph compression.
+
+        When compression is active, this method **must** return an edge_type tensor
+        filtered with the same edge mask as edge_index; otherwise edge types become
+        misaligned with edges (security-critical for multi-relational reasoning).
+        """
         
         # Step 1: Merge property node sequences
         x = self.merge_property_sequences(x, edge_index)
@@ -561,14 +571,15 @@ class InterProceduralAbstractGraph(nn.Module):
             
             if edge_mask.any():
                 compressed_edge_index = edge_index[:, edge_mask]
+                compressed_edge_type = edge_type[edge_mask]
                 # Remap indices
                 for i in range(compressed_edge_index.size(1)):
                     compressed_edge_index[0, i] = old_to_new[compressed_edge_index[0, i].item()]
                     compressed_edge_index[1, i] = old_to_new[compressed_edge_index[1, i].item()]
                 
-                return x[top_indices], compressed_edge_index
+                return x[top_indices], compressed_edge_index, compressed_edge_type
         
-        return x, edge_index
+        return x, edge_index, edge_type
 
 # 
 # 3. Adaptive Transformer-GNN Fusion (Research Integration)
@@ -1338,11 +1349,7 @@ class NextGenSpatialGNNVulnerabilityDetector(nn.Module):
         all_attention_weights = {}
         
         # Stage 1: IPAG Processing
-        x, processed_edge_index = self.ipag_processor(x, edge_index, edge_type, batch=batch)
-        
-        # Update edge_type for processed graph (may be compressed)
-        if processed_edge_index.shape[1] != edge_index.shape[1]:
-            edge_type = edge_type[:processed_edge_index.shape[1]]
+        x, processed_edge_index, edge_type = self.ipag_processor(x, edge_index, edge_type, batch=batch)
         
         # Stage 2: Enhanced Multi-Relational Processing
         h = x
