@@ -452,7 +452,7 @@ def _get_css_styles() -> str:
         }
         
         .banner img {
-            max-width: 600px;
+            max-width: 1050px;
             width: 100%;
             height: auto;
         }
