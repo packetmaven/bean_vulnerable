@@ -455,7 +455,7 @@ def _get_css_styles() -> str:
             max-width: 1050px;
             width: 100%;
             height: auto;
-            filter: brightness(1.55) contrast(1.2);
+            filter: brightness(1.99) contrast(1.85);
         }
         
         .generated-timestamp {
