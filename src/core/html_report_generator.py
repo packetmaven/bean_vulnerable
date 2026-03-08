@@ -32,17 +32,18 @@ def generate_comprehensive_html_report(result: Dict[str, Any], report_dir: Path,
         report_dir: Directory to save the report
         command_line: Command line used for analysis
     """
-    # Copy banner image to report directory
-    banner_source = Path(__file__).parent.parent.parent / 'ascii-art-text.png'
-    if banner_source.exists():
-        banner_dest = report_dir / 'banner.png'
-        shutil.copy2(banner_source, banner_dest)
-    else:
-        # Fallback to banner.png if ascii-art-text.png doesn't exist
-        banner_source_alt = Path(__file__).parent.parent.parent / 'banner.png'
-        if banner_source_alt.exists():
+    # Copy banner image to report directory (prefer updated banner)
+    repo_root = Path(__file__).parent.parent.parent
+    banner_candidates = [
+        repo_root / 'docs' / 'images' / 'bean_vulnerable_banner.png',
+        repo_root / 'ascii-art-text.png',
+        repo_root / 'banner.png',
+    ]
+    for banner_source in banner_candidates:
+        if banner_source.exists():
             banner_dest = report_dir / 'banner.png'
-            shutil.copy2(banner_source_alt, banner_dest)
+            shutil.copy2(banner_source, banner_dest)
+            break
     
     # Copy source Java file to report directory for easy access
     input_file = result.get('input', '')
