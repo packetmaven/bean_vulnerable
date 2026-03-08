@@ -1,7 +1,7 @@
 # Bean Vulnerable GNN Framework
 > **Status:** Spatial GNN inference runs by default when torch/torch-geometric are installed. For meaningful results, provide trained weights via `--gnn-checkpoint`. The GNN is always on when dependencies are present (`--no-spatial-gnn` is ignored).
 
-![Bean Vulnerable ASCII Banner](ascii-art-text.png)
+![Bean Vulnerable Banner](docs/images/bean_vulnerable_banner.png)
 
 A vulnerability analysis framework with experimental GNN modules; heuristic scoring is the default, and trained GNN inference is supported via `--gnn-checkpoint`.
 

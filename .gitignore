@@ -203,6 +203,7 @@ comprehensive_graphs.sc
 *.stdout
 dfg_paths.txt
 dfg_paths.stderr
+fix_bean_vulnerable_circular_ref.sh
 
 # Backup files
 *.md.bak
