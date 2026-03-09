@@ -1,0 +1,83 @@
+{
+  "schema_version": "1.0.0",
+  "case": {
+    "case_id": "OOD-2026-0001",
+    "analyzed_at_utc": "2026-03-09T00:00:00Z",
+    "analyst": "security-researcher",
+    "team": "appsec-research"
+  },
+  "input": {
+    "source_path": "tests/samples/VUL_OOD_Malicious_ResponseSplitVariant.java",
+    "tool_version": "bean-vuln2",
+    "report_json_path": "analysis/ood_malicious_response_variant.json",
+    "report_html_path": "analysis/ood_malicious_response_variant_html/index.html"
+  },
+  "signal": {
+    "cescl_available": true,
+    "cescl_is_ood": true,
+    "fusion_source": "heuristic_only_ood",
+    "fusion_ood_detected": true,
+    "vulnerability_type": "http_response_splitting",
+    "severity": "HIGH",
+    "scores": {
+      "heuristic_confidence": 0.8661,
+      "final_confidence": 0.8661,
+      "gnn_confidence": 0.7489,
+      "confidence_delta": 0.0
+    },
+    "ood": {
+      "ood_score": 2.5409,
+      "ood_threshold": 2.4623,
+      "ood_margin": 0.0786,
+      "ood_ratio": 1.0319,
+      "novelty_band": "N2"
+    }
+  },
+  "evidence": {
+    "evidence_band": "E3",
+    "taint_flows": 9,
+    "sink_evidence": [
+      "response.setHeader(\"X-User-Agent\", userAgent)",
+      "response.sendRedirect(url)"
+    ],
+    "source_evidence": [
+      "request.getParameter(\"userAgent\")",
+      "request.getParameter(\"redirect\")"
+    ],
+    "sanitizer_evidence": [],
+    "exploitability_notes": "CRLF payloads can alter response headers and downstream cache behavior."
+  },
+  "stability": {
+    "reruns_requested": 2,
+    "reruns_completed": 2,
+    "stable": true,
+    "verdict_changes": 0,
+    "demoted": false
+  },
+  "classification": {
+    "priority": "P1",
+    "rationale": "OOD is true with moderate novelty margin and strong source-to-sink evidence in high-impact response sinks.",
+    "confidence_in_triage": 0.86
+  },
+  "reproducibility": {
+    "checkpoint_path": "models/spatial_gnn/best_model.pt",
+    "prototype_source": "checkpoint_embedded",
+    "command_line": "./bean_vuln2 tests/samples/VUL_OOD_Malicious_ResponseSplitVariant.java --comprehensive --summary --gnn-checkpoint models/spatial_gnn/best_model.pt --require-gnn --out analysis/ood_malicious_response_variant.json"
+  },
+  "decision": {
+    "owner": "security-oncall",
+    "due_date_utc": "2026-03-10T00:00:00Z",
+    "status": "open",
+    "immediate_actions": [
+      "Senior review",
+      "Patch proposal",
+      "Regression test"
+    ],
+    "escalation_required": true
+  },
+  "policy_checks": {
+    "telemetry_valid": true,
+    "fusion_safety_pass": true,
+    "notes": "Heuristic confidence preserved under OOD fallback."
+  }
+}

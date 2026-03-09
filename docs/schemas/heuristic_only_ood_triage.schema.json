@@ -1,0 +1,581 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://packetmaven.github.io/bean_vulnerable/schemas/heuristic_only_ood_triage.schema.json",
+  "title": "HeuristicOnlyOODTriageRecord",
+  "description": "Machine-validated triage record for CESCL OOD findings where fusion source is heuristic_only_ood.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "case",
+    "input",
+    "signal",
+    "evidence",
+    "stability",
+    "classification",
+    "reproducibility",
+    "decision"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^1\\.0\\.0$",
+      "description": "Schema contract version."
+    },
+    "case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "case_id",
+        "analyzed_at_utc",
+        "analyst"
+      ],
+      "properties": {
+        "case_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._:-]{3,64}$"
+        },
+        "analyzed_at_utc": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "analyst": {
+          "type": "string",
+          "minLength": 1
+        },
+        "team": {
+          "type": "string",
+          "minLength": 1
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 4000
+        }
+      }
+    },
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_path",
+        "tool_version"
+      ],
+      "properties": {
+        "source_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tool_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "commit_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{7,40}$"
+        },
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "report_json_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "report_html_path": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "signal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cescl_available",
+        "cescl_is_ood",
+        "fusion_source",
+        "fusion_ood_detected",
+        "vulnerability_type",
+        "severity",
+        "scores",
+        "ood"
+      ],
+      "properties": {
+        "cescl_available": {
+          "type": "boolean",
+          "const": true
+        },
+        "cescl_is_ood": {
+          "type": "boolean",
+          "const": true
+        },
+        "fusion_source": {
+          "type": "string",
+          "const": "heuristic_only_ood"
+        },
+        "fusion_ood_detected": {
+          "type": "boolean",
+          "const": true
+        },
+        "vulnerability_type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "LOW",
+            "MEDIUM",
+            "HIGH",
+            "CRITICAL",
+            "UNKNOWN"
+          ]
+        },
+        "scores": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "heuristic_confidence",
+            "final_confidence",
+            "gnn_confidence"
+          ],
+          "properties": {
+            "heuristic_confidence": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "final_confidence": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "gnn_confidence": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "confidence_delta": {
+              "type": "number",
+              "minimum": -1,
+              "maximum": 1,
+              "description": "Optional final-minus-heuristic confidence delta."
+            }
+          }
+        },
+        "ood": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ood_score",
+            "ood_threshold",
+            "ood_margin",
+            "ood_ratio",
+            "novelty_band"
+          ],
+          "properties": {
+            "ood_score": {
+              "type": "number",
+              "minimum": 0
+            },
+            "ood_threshold": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "ood_margin": {
+              "type": "number"
+            },
+            "ood_ratio": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "novelty_band": {
+              "type": "string",
+              "enum": [
+                "N0",
+                "N1",
+                "N2",
+                "N3",
+                "N4"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evidence_band",
+        "taint_flows",
+        "sink_evidence",
+        "source_evidence",
+        "sanitizer_evidence"
+      ],
+      "properties": {
+        "evidence_band": {
+          "type": "string",
+          "enum": [
+            "E0",
+            "E1",
+            "E2",
+            "E3"
+          ]
+        },
+        "taint_flows": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sink_evidence": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 3
+          }
+        },
+        "source_evidence": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 3
+          }
+        },
+        "sanitizer_evidence": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "exploitability_notes": {
+          "type": "string",
+          "maxLength": 4000
+        }
+      }
+    },
+    "stability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reruns_requested",
+        "reruns_completed",
+        "stable",
+        "verdict_changes",
+        "demoted"
+      ],
+      "properties": {
+        "reruns_requested": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reruns_completed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "stable": {
+          "type": "boolean"
+        },
+        "verdict_changes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "demoted": {
+          "type": "boolean"
+        },
+        "instability_reasons": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "classification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "priority",
+        "rationale"
+      ],
+      "properties": {
+        "priority": {
+          "type": "string",
+          "enum": [
+            "P1",
+            "P2",
+            "P3"
+          ]
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 20
+        },
+        "confidence_in_triage": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    },
+    "reproducibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "checkpoint_path",
+        "prototype_source",
+        "command_line"
+      ],
+      "properties": {
+        "checkpoint_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "prototype_source": {
+          "type": "string",
+          "enum": [
+            "checkpoint_embedded",
+            "external_file",
+            "unknown"
+          ]
+        },
+        "prototype_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "command_line": {
+          "type": "string",
+          "minLength": 1
+        },
+        "environment_fingerprint": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "owner",
+        "due_date_utc",
+        "immediate_actions"
+      ],
+      "properties": {
+        "owner": {
+          "type": "string",
+          "minLength": 1
+        },
+        "due_date_utc": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "open",
+            "in_progress",
+            "closed"
+          ]
+        },
+        "immediate_actions": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 3
+          }
+        },
+        "escalation_required": {
+          "type": "boolean"
+        }
+      }
+    },
+    "policy_checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "telemetry_valid",
+        "fusion_safety_pass"
+      ],
+      "properties": {
+        "telemetry_valid": {
+          "type": "boolean"
+        },
+        "fusion_safety_pass": {
+          "type": "boolean"
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 4000
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "classification": {
+            "properties": {
+              "priority": {
+                "const": "P1"
+              }
+            },
+            "required": [
+              "priority"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "signal": {
+            "properties": {
+              "ood": {
+                "properties": {
+                  "novelty_band": {
+                    "enum": [
+                      "N2",
+                      "N3",
+                      "N4"
+                    ]
+                  }
+                },
+                "required": [
+                  "novelty_band"
+                ]
+              }
+            }
+          },
+          "evidence": {
+            "properties": {
+              "evidence_band": {
+                "enum": [
+                  "E2",
+                  "E3"
+                ]
+              }
+            },
+            "required": [
+              "evidence_band"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "stability": {
+            "properties": {
+              "stable": {
+                "const": false
+              }
+            },
+            "required": [
+              "stable"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "classification": {
+            "properties": {
+              "priority": {
+                "enum": [
+                  "P2",
+                  "P3"
+                ]
+              }
+            },
+            "required": [
+              "priority"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "examples": [
+    {
+      "schema_version": "1.0.0",
+      "case": {
+        "case_id": "OOD-2026-0001",
+        "analyzed_at_utc": "2026-03-09T00:00:00Z",
+        "analyst": "security-researcher"
+      },
+      "input": {
+        "source_path": "tests/samples/VUL_OOD_Malicious_ResponseSplitVariant.java",
+        "tool_version": "bean-vuln2"
+      },
+      "signal": {
+        "cescl_available": true,
+        "cescl_is_ood": true,
+        "fusion_source": "heuristic_only_ood",
+        "fusion_ood_detected": true,
+        "vulnerability_type": "http_response_splitting",
+        "severity": "HIGH",
+        "scores": {
+          "heuristic_confidence": 0.8661,
+          "final_confidence": 0.8661,
+          "gnn_confidence": 0.7489
+        },
+        "ood": {
+          "ood_score": 2.5409,
+          "ood_threshold": 2.4623,
+          "ood_margin": 0.0786,
+          "ood_ratio": 1.0319,
+          "novelty_band": "N2"
+        }
+      },
+      "evidence": {
+        "evidence_band": "E3",
+        "taint_flows": 9,
+        "sink_evidence": [
+          "response.setHeader(\"X-User-Agent\", userAgent)"
+        ],
+        "source_evidence": [
+          "request.getParameter(\"userAgent\")"
+        ],
+        "sanitizer_evidence": []
+      },
+      "stability": {
+        "reruns_requested": 2,
+        "reruns_completed": 2,
+        "stable": true,
+        "verdict_changes": 0,
+        "demoted": false
+      },
+      "classification": {
+        "priority": "P1",
+        "rationale": "OOD is true with moderate novelty margin and strong sink/flow evidence."
+      },
+      "reproducibility": {
+        "checkpoint_path": "models/spatial_gnn/best_model.pt",
+        "prototype_source": "checkpoint_embedded",
+        "command_line": "./bean_vuln2 ... --summary --out analysis/ood_malicious_response_variant.json"
+      },
+      "decision": {
+        "owner": "security-oncall",
+        "due_date_utc": "2026-03-10T00:00:00Z",
+        "immediate_actions": [
+          "Senior review",
+          "Patch proposal",
+          "Regression test"
+        ]
+      },
+      "policy_checks": {
+        "telemetry_valid": true,
+        "fusion_safety_pass": true
+      }
+    }
+  ]
+}

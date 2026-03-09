@@ -116,6 +116,334 @@ def _maybe_prompt_tai_e_home(args: argparse.Namespace) -> None:
     jar_path = _resolve_tai_e_jar(user_input)
     args.tai_e_home = str(jar_path) if jar_path else user_input
 
+
+def _has_native_sources(path: Path) -> bool:
+    if not path.exists() or not path.is_dir():
+        return False
+    for ext in (".c", ".cc", ".cpp", ".cxx", ".h", ".hpp"):
+        if any(path.rglob(f"*{ext}")):
+            return True
+    return False
+
+
+def _auto_detect_jni_native_root(inputs: List[str]) -> Optional[str]:
+    """Best-effort native root auto-detection for JNI spectrum mode."""
+    for raw_input in inputs:
+        try:
+            resolved = Path(raw_input).expanduser().resolve()
+        except Exception:
+            continue
+        candidates: List[Path] = []
+        if resolved.is_file():
+            candidates.extend(
+                [
+                    resolved.parent / "native",
+                    resolved.parent / "jni" / "native",
+                    resolved.parent.parent / "native",
+                    resolved.parent.parent / "jni" / "native",
+                ]
+            )
+        elif resolved.is_dir():
+            candidates.extend(
+                [
+                    resolved / "native",
+                    resolved / "jni" / "native",
+                    resolved / "src" / "main" / "native",
+                ]
+            )
+        for candidate in candidates:
+            if _has_native_sources(candidate):
+                return str(candidate)
+    return None
+
+
+def _auto_detect_compile_commands(native_root: Optional[str], inputs: List[str]) -> Optional[str]:
+    candidates: List[Path] = []
+    if native_root:
+        root_path = Path(native_root).expanduser().resolve()
+        candidates.extend(
+            [
+                root_path / "compile_commands.json",
+                root_path.parent / "compile_commands.json",
+                root_path.parent.parent / "compile_commands.json",
+            ]
+        )
+    for raw_input in inputs:
+        try:
+            resolved = Path(raw_input).expanduser().resolve()
+        except Exception:
+            continue
+        base = resolved.parent if resolved.is_file() else resolved
+        candidates.extend(
+            [
+                base / "compile_commands.json",
+                base.parent / "compile_commands.json",
+                base.parent / "build" / "compile_commands.json",
+            ]
+        )
+    seen = set()
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if candidate.exists() and candidate.is_file():
+            return str(candidate)
+    return None
+
+
+def _auto_detect_crosslang_artifact(
+    explicit_path: Optional[str],
+    native_root: Optional[str],
+    inputs: List[str],
+    candidate_names: List[str],
+) -> Optional[str]:
+    if explicit_path:
+        return explicit_path
+    candidates: List[Path] = []
+    if native_root:
+        root_path = Path(native_root).expanduser().resolve()
+        for name in candidate_names:
+            candidates.append(root_path / name)
+            candidates.append(root_path.parent / name)
+    for raw_input in inputs:
+        try:
+            resolved = Path(raw_input).expanduser().resolve()
+        except Exception:
+            continue
+        base = resolved.parent if resolved.is_file() else resolved
+        for name in candidate_names:
+            candidates.append(base / name)
+            candidates.append(base.parent / name)
+    seen = set()
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if candidate.exists() and candidate.is_file():
+            return str(candidate)
+    return None
+
+
+def _format_count_map(counts: Dict[str, Any], max_items: int = 5) -> str:
+    if not isinstance(counts, dict) or not counts:
+        return "none"
+    items: List[Tuple[str, int]] = []
+    for key, value in counts.items():
+        try:
+            items.append((str(key), int(value)))
+        except Exception:
+            continue
+    if not items:
+        return "none"
+    items.sort(key=lambda item: (-item[1], item[0]))
+    shown = ", ".join(f"{k}×{v}" for k, v in items[:max_items])
+    if len(items) > max_items:
+        shown += f", +{len(items) - max_items} more"
+    return shown
+
+
+def _summarize_native_jni(native_jni: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(native_jni, dict):
+        return {}
+    resolved = native_jni.get("resolved_bindings", [])
+    unresolved = native_jni.get("unresolved_bindings", [])
+    dynamic = native_jni.get("dynamic_registrations", [])
+    coverage = native_jni.get("binding_coverage", {})
+    invocation = native_jni.get("invocation_api_usage", {})
+    callbacks = native_jni.get("callback_api_usage", {})
+    jni_call_graph = native_jni.get("jni_call_graph", [])
+    native_summaries = native_jni.get("native_method_summaries", [])
+    crosslang_impact = (
+        native_jni.get("crosslang_impact", {})
+        if isinstance(native_jni.get("crosslang_impact"), dict)
+        else {}
+    )
+    impact_delta = crosslang_impact.get("delta", {}) if isinstance(crosslang_impact.get("delta"), dict) else {}
+    impact_baseline = (
+        crosslang_impact.get("baseline", {})
+        if isinstance(crosslang_impact.get("baseline"), dict)
+        else {}
+    )
+    impact_effective = (
+        crosslang_impact.get("effective", {})
+        if isinstance(crosslang_impact.get("effective"), dict)
+        else {}
+    )
+    taie_facts = native_jni.get("taie_facts", {}) if isinstance(native_jni.get("taie_facts"), dict) else {}
+    svf_output = native_jni.get("svf_output", {}) if isinstance(native_jni.get("svf_output"), dict) else {}
+    risk_counts = (
+        native_jni.get("native_risk_patterns", {}).get("counts", {})
+        if isinstance(native_jni.get("native_risk_patterns"), dict)
+        else {}
+    )
+    risk_total = 0
+    if isinstance(risk_counts, dict):
+        for value in risk_counts.values():
+            try:
+                risk_total += int(value)
+            except Exception:
+                continue
+    return {
+        "mode": str(native_jni.get("analysis_mode", "heuristic")),
+        "jni_methods": int(native_jni.get("jni_methods", 0) or 0),
+        "taint_transfers": int(native_jni.get("taint_transfers", 0) or 0),
+        "resolved_bindings": len(resolved) if isinstance(resolved, list) else 0,
+        "unresolved_bindings": len(unresolved) if isinstance(unresolved, list) else 0,
+        "dynamic_registrations": len(dynamic) if isinstance(dynamic, list) else 0,
+        "binding_coverage": coverage if isinstance(coverage, dict) else {},
+        "invocation_api_usage": invocation if isinstance(invocation, dict) else {},
+        "callback_api_usage": callbacks if isinstance(callbacks, dict) else {},
+        "jni_call_graph_edges": len(jni_call_graph) if isinstance(jni_call_graph, list) else 0,
+        "native_method_summaries": len(native_summaries) if isinstance(native_summaries, list) else 0,
+        "cross_language_backend_requested": native_jni.get("cross_language_backend_requested"),
+        "cross_language_backend": native_jni.get("cross_language_backend"),
+        "cross_language_status": native_jni.get("cross_language_status"),
+        "crosslang_impact": crosslang_impact,
+        "impact_available": bool(crosslang_impact.get("available", False)),
+        "impact_status": crosslang_impact.get("status"),
+        "impact_reason": crosslang_impact.get("reason"),
+        "impact_delta": impact_delta,
+        "impact_baseline": impact_baseline,
+        "impact_effective": impact_effective,
+        "compile_commands_used": bool(native_jni.get("compile_commands_used", False)),
+        "taie_facts_loaded": bool(taie_facts.get("loaded", False)),
+        "taie_facts_source": taie_facts.get("source_path"),
+        "svf_output_loaded": bool(svf_output.get("loaded", False)),
+        "svf_output_source": svf_output.get("source_path"),
+        "risk_counts": risk_counts if isinstance(risk_counts, dict) else {},
+        "risk_total": risk_total,
+        "jni_libraries": native_jni.get("jni_libraries", []) if isinstance(native_jni.get("jni_libraries"), list) else [],
+        "symbol_scan_tool": (
+            native_jni.get("symbol_scan", {}).get("symbol_tool")
+            if isinstance(native_jni.get("symbol_scan"), dict)
+            else None
+        ),
+        "symbol_hits": (
+            len(native_jni.get("symbol_scan", {}).get("jni_symbols", []) or [])
+            if isinstance(native_jni.get("symbol_scan"), dict)
+            else 0
+        ),
+    }
+
+
+def _normalize_jni_cli_args(args: argparse.Namespace) -> None:
+    if not getattr(args, "native_jni", False):
+        return
+
+    if not hasattr(args, "jni_crosslang_backend"):
+        args.jni_crosslang_backend = "auto"
+    if not hasattr(args, "jni_taie_facts"):
+        args.jni_taie_facts = None
+    if not hasattr(args, "jni_svf_output"):
+        args.jni_svf_output = None
+    if not hasattr(args, "jni_fail_closed"):
+        args.jni_fail_closed = False
+    if not hasattr(args, "jni_compile_commands"):
+        args.jni_compile_commands = None
+    if not hasattr(args, "jni_spectrum"):
+        args.jni_spectrum = False
+
+    if getattr(args, "jni_spectrum", False):
+        # Full-spectrum mode should prioritize evidence collection over minimal heuristics.
+        if args.jni_mode == "heuristic":
+            args.jni_mode = "summary"
+        args.jni_resolve_register_natives = True
+        args.jni_disable_callbacks = False
+        args.taint_graph = True
+
+    if args.jni_mode == "crosslang":
+        # Cross-language mode implies full-spectrum extraction prerequisites.
+        args.jni_resolve_register_natives = True
+        args.jni_disable_callbacks = False
+        args.taint_graph = True
+        if str(getattr(args, "jni_crosslang_backend", "auto")).strip().lower() not in {"auto", "heuristic", "taie_svf"}:
+            LOG.warning("⚠️ Invalid --jni-crosslang-backend value. Falling back to 'auto'.")
+            args.jni_crosslang_backend = "auto"
+
+    if args.jni_mode == "heuristic" and (
+        args.jni_native_root or args.jni_binary or args.jni_resolve_register_natives
+    ):
+        args.jni_mode = "summary"
+        LOG.info("🔧 Auto-upgraded --jni-mode to 'summary' due JNI resolver options.")
+
+    if not args.jni_native_root and getattr(args, "jni_spectrum", False):
+        detected = _auto_detect_jni_native_root(args.input)
+        if detected:
+            args.jni_native_root = detected
+            LOG.info(f"🧭 Auto-detected JNI native root: {detected}")
+        else:
+            LOG.warning("⚠️ JNI spectrum mode enabled but no native root detected. Pass --jni-native-root for full resolver coverage.")
+
+    if args.jni_mode == "crosslang" and not args.jni_native_root:
+        detected = _auto_detect_jni_native_root(args.input)
+        if detected:
+            args.jni_native_root = detected
+            LOG.info(f"🧭 Auto-detected JNI native root for crosslang mode: {detected}")
+        else:
+            LOG.warning("⚠️ crosslang mode requested without --jni-native-root; cross-language edges may be limited.")
+
+    if args.jni_mode == "crosslang" and not args.jni_compile_commands:
+        compile_db = _auto_detect_compile_commands(args.jni_native_root, args.input)
+        if compile_db:
+            args.jni_compile_commands = compile_db
+            LOG.info(f"🧩 Auto-detected compile_commands.json: {compile_db}")
+
+    if args.jni_mode == "crosslang":
+        args.jni_taie_facts = _auto_detect_crosslang_artifact(
+            explicit_path=args.jni_taie_facts,
+            native_root=args.jni_native_root,
+            inputs=args.input,
+            candidate_names=[
+                "taie_facts.json",
+                "taie_points_to.json",
+                "points_to.json",
+                "call_graph.json",
+            ],
+        )
+        args.jni_svf_output = _auto_detect_crosslang_artifact(
+            explicit_path=args.jni_svf_output,
+            native_root=args.jni_native_root,
+            inputs=args.input,
+            candidate_names=[
+                "svf_output.json",
+                "svf_facts.json",
+                "svf_callgraph.json",
+                "svf_callgraph.dot",
+                "callgraph.dot",
+            ],
+        )
+        if args.jni_taie_facts:
+            LOG.info(f"🧩 Tai-e facts path: {args.jni_taie_facts}")
+        if args.jni_svf_output:
+            LOG.info(f"🧩 SVF output path: {args.jni_svf_output}")
+
+        backend_choice = str(args.jni_crosslang_backend).strip().lower()
+        if backend_choice == "taie_svf":
+            missing = []
+            if not args.jni_taie_facts:
+                missing.append("Tai-e facts")
+            if not args.jni_svf_output:
+                missing.append("SVF output")
+            if missing:
+                msg = f"⚠️ taie_svf backend requested but missing: {', '.join(missing)}."
+                if args.jni_fail_closed:
+                    raise ValueError(msg + " Fail-closed mode requires both artifacts.")
+                LOG.warning(msg + " Will fall back to heuristic crosslang backend.")
+        elif backend_choice == "auto":
+            if args.jni_taie_facts and args.jni_svf_output:
+                LOG.info("🧠 Auto backend will use taie_svf facts fusion.")
+            else:
+                if args.jni_fail_closed:
+                    raise ValueError(
+                        "⚠️ Fail-closed mode with auto crosslang backend requires both Tai-e facts and SVF output."
+                    )
+                LOG.info("🧠 Auto backend will use heuristic crosslang reconstruction.")
+        if args.jni_fail_closed and backend_choice == "heuristic":
+            LOG.warning("⚠️ --jni-fail-closed has limited effect with heuristic backend.")
+
+    if args.jni_symbol_tool and not args.jni_binary:
+        LOG.warning("⚠️ --jni-symbol-tool provided without --jni-binary; symbol scanning will be skipped.")
+
 EDGE_LABEL_RE = re.compile(r'label\s*=\s*"([A-Z]+):')
 
 
@@ -955,6 +1283,17 @@ def initialize_framework(args) -> Tuple[Any, Optional[Any]]:
             enable_implicit_flows=args.implicit_flows,
             enable_path_sensitive=args.path_sensitive,
             enable_native_jni=args.native_jni,
+            jni_mode=args.jni_mode,
+            jni_native_root=args.jni_native_root,
+            jni_compile_commands=args.jni_compile_commands,
+            jni_crosslang_backend=args.jni_crosslang_backend,
+            jni_taie_facts=args.jni_taie_facts,
+            jni_svf_output=args.jni_svf_output,
+            jni_fail_closed=args.jni_fail_closed,
+            jni_binary=args.jni_binary,
+            jni_symbol_tool=args.jni_symbol_tool,
+            jni_resolve_register_natives=args.jni_resolve_register_natives,
+            jni_disable_callbacks=args.jni_disable_callbacks,
             enable_tai_e=args.tai_e,
             tai_e_home=args.tai_e_home,
             tai_e_cs=args.tai_e_cs,
@@ -1083,7 +1422,7 @@ def main():
     
     # Enhanced argument parser with new research-based options
     ap = argparse.ArgumentParser(
-        prog="bean-vuln-enhanced",
+        prog="bean-vuln2",
         description="Bean Vulnerable Framework - Enhanced CLI (experimental features)",
         formatter_class=argparse.RawTextHelpFormatter
     )
@@ -1220,6 +1559,30 @@ def main():
                     help="Enable native (JNI) taint tracking (default: enabled)")
     ap.add_argument("--no-native-jni", dest="native_jni", action="store_false",
                     help="Disable native (JNI) taint tracking")
+    ap.add_argument("--jni-mode", choices=["heuristic", "summary", "crosslang"], default="heuristic",
+                    help="JNI tracking mode (heuristic=Java-only, summary=bindings, crosslang=call-graph/points-to summaries; default: heuristic)")
+    ap.add_argument("--jni-crosslang-backend", choices=["auto", "heuristic", "taie_svf"], default="auto",
+                    help="Crosslang backend selection: auto, heuristic, or explicit taie_svf fact fusion")
+    ap.add_argument("--jni-spectrum", action="store_true",
+                    help="Enable full JNI spectrum collection (summary mode + RegisterNatives + callbacks + taint graph)")
+    ap.add_argument("--jni-native-root",
+                    help="Root directory for native C/C++ sources (for JNI binding resolution)")
+    ap.add_argument("--jni-compile-commands",
+                    help="Optional path to compile_commands.json for native translation unit context")
+    ap.add_argument("--jni-taie-facts",
+                    help="Path to Tai-e fact artifact (JSON file or directory)")
+    ap.add_argument("--jni-svf-output",
+                    help="Path to SVF output artifact (JSON/DOT/TXT file or directory)")
+    ap.add_argument("--jni-fail-closed", action="store_true",
+                    help="Strict mode: fail run when requested crosslang evidence is missing")
+    ap.add_argument("--jni-binary",
+                    help="Optional native binary path (.so/.dylib/.dll) for symbol-table JNI detection")
+    ap.add_argument("--jni-symbol-tool",
+                    help="Optional symbol tool override (llvm-nm, nm, objdump)")
+    ap.add_argument("--jni-resolve-register-natives", action="store_true",
+                    help="Attempt RegisterNatives resolution (heuristic, best-effort)")
+    ap.add_argument("--jni-disable-callbacks", action="store_true",
+                    help="Disable JNI callback modeling (C->Java)")
     ap.add_argument("--tai-e-precision-diagnose", action="store_true",
                     help="Run heuristic precision diagnosis for Tai-e runs")
     ap.add_argument("--tai-e-profile", action="store_true",
@@ -1277,6 +1640,11 @@ def main():
         else:
             LOG.warning("Tai-e taint enabled but no config found; skipping taint analysis.")
             args.tai_e_taint = False
+    try:
+        _normalize_jni_cli_args(args)
+    except ValueError as exc:
+        LOG.error(str(exc))
+        sys.exit(2)
     _maybe_prompt_tai_e_home(args)
     
     # Configure comprehensive mode
@@ -1356,6 +1724,23 @@ def main():
     print(f"🤖 RL Path Priority: {'✅' if config.enable_rl_prioritization else '❌'}")
     print(f"🧪 Property Testing: {'✅' if config.enable_property_testing else '❌'}")
     print(f"🌊 Taint Tracking: ✅ (Always Enabled)")  # Taint tracking is always on
+    print(f"🧷 JNI Mode: {args.jni_mode} ({'enabled' if args.native_jni else 'disabled'})")
+    if args.native_jni:
+        native_root_label = args.jni_native_root if args.jni_native_root else "not set"
+        print(f"    ↳ Native root: {native_root_label}")
+        if args.jni_mode == "crosslang":
+            print(f"    ↳ Crosslang backend: {args.jni_crosslang_backend}")
+            if args.jni_compile_commands:
+                print(f"    ↳ compile_commands: {args.jni_compile_commands}")
+            if args.jni_taie_facts:
+                print(f"    ↳ Tai-e facts: {args.jni_taie_facts}")
+            if args.jni_svf_output:
+                print(f"    ↳ SVF output: {args.jni_svf_output}")
+            print(f"    ↳ Fail closed: {'✅' if args.jni_fail_closed else '❌'}")
+        if args.jni_binary:
+            print(f"    ↳ JNI binary: {args.jni_binary}")
+        print(f"    ↳ RegisterNatives resolver: {'✅' if args.jni_resolve_register_natives else '❌'}")
+        print(f"    ↳ Callbacks modeled: {'❌' if args.jni_disable_callbacks else '✅'}")
     print(f"⚡ Parallel Workers: {config.parallel_workers}")
     print("=" * 60)
     
@@ -1411,6 +1796,10 @@ def main():
                 continue
                 
             if isinstance(result, VulnerabilityResult):
+                if args.jni_fail_closed and str(result.vulnerability_type) == "AnalysisError":
+                    raise RuntimeError(
+                        f"fail_closed_jni_abort:{getattr(result, 'explanation', 'analysis_error')}"
+                    )
                 source_path = Path(args.input[i]).expanduser().resolve() if i < len(args.input) else None
                 if source_path and framework_results:
                     _apply_debug_utilities_enhanced(
@@ -1419,15 +1808,60 @@ def main():
                         args,
                         debug_report_dir,
                     )
+                native_jni: Dict[str, Any] = {}
+                if isinstance(fw_result, dict):
+                    taint_payload = fw_result.get("taint_tracking", {})
+                    if isinstance(taint_payload, dict):
+                        native_payload = taint_payload.get("native_code_analysis", {})
+                        if isinstance(native_payload, dict):
+                            native_jni = native_payload
+                jni_summary = _summarize_native_jni(native_jni)
                 # Display summary if requested
                 if args.summary:
                     print(f"  📊 Result Summary:")
                     print(f"    🎯 Vulnerable: {result.vulnerability_detected}")
                     print(f"    📈 Confidence: {result.confidence:.3f}")
+                    heuristic_conf = (
+                        fw_result.get("heuristic_confidence")
+                        if isinstance(fw_result, dict)
+                        else None
+                    )
+                    if not isinstance(heuristic_conf, (int, float)):
+                        heuristic_conf = float(result.confidence)
+                    print(f"    🧪 Heuristic confidence: {float(heuristic_conf):.3f}")
                     print(f"    🏷️  Type: {result.vulnerability_type}")
                     print(f"    ⚠️  Severity: {result.severity}")
                     print(f"    🔍 Method: {result.detection_method}")
                     print(f"    ⏱️  Time: {result.analysis_time:.2f}s")
+
+                    if isinstance(fw_result, dict):
+                        fusion = fw_result.get("confidence_fusion", {})
+                        if isinstance(fusion, dict):
+                            fusion_source = fusion.get("source")
+                            if fusion_source is not None:
+                                print(f"    🧠 Fusion source: {fusion_source}")
+                            if "ood_detected" in fusion:
+                                print(
+                                    "    🧠 Fusion OOD detected: "
+                                    f"{str(bool(fusion.get('ood_detected'))).lower()}"
+                                )
+                        if "cescl_available" in fw_result:
+                            print(
+                                "    🧠 CESCL available: "
+                                f"{str(bool(fw_result.get('cescl_available'))).lower()}"
+                            )
+                        if isinstance(fw_result.get("cescl_ood_score"), (int, float)):
+                            print(f"    🧠 CESCL OOD score: {float(fw_result.get('cescl_ood_score')):.4f}")
+                        if "cescl_is_ood" in fw_result:
+                            print(
+                                "    🧠 CESCL is OOD: "
+                                f"{str(bool(fw_result.get('cescl_is_ood'))).lower()}"
+                            )
+                        if isinstance(fw_result.get("cescl_calibrated_confidence"), (int, float)):
+                            print(
+                                "    🧠 CESCL calibrated confidence: "
+                                f"{float(fw_result.get('cescl_calibrated_confidence')):.4f}"
+                            )
                     
                     # Enhanced metrics display
                     if result.graph_metrics:
@@ -1437,6 +1871,84 @@ def main():
                             print(f"    🌊 Taint Flows: {metrics.get('taint_flows', 0)}")
                         if metrics.get('symbolic_paths', 0) > 0:
                             print(f"    🔀 Symbolic Paths: {metrics.get('symbolic_paths', 0)}")
+
+                    if jni_summary:
+                        print(f"    🧷 JNI: mode={jni_summary.get('mode', 'heuristic')}, methods={jni_summary.get('jni_methods', 0)}, transfers={jni_summary.get('taint_transfers', 0)}")
+                        print(
+                            "       bindings: "
+                            f"resolved={jni_summary.get('resolved_bindings', 0)}, "
+                            f"unresolved={jni_summary.get('unresolved_bindings', 0)}, "
+                            f"dynamic={jni_summary.get('dynamic_registrations', 0)}"
+                        )
+                        coverage_text = _format_count_map(jni_summary.get("binding_coverage", {}), max_items=6)
+                        if coverage_text != "none":
+                            print(f"       coverage: {coverage_text}")
+                        inv_text = _format_count_map(jni_summary.get("invocation_api_usage", {}), max_items=5)
+                        cb_text = _format_count_map(jni_summary.get("callback_api_usage", {}), max_items=5)
+                        print(f"       invocation APIs: {inv_text}")
+                        print(f"       callback APIs: {cb_text}")
+                        call_graph_edges = int(jni_summary.get("jni_call_graph_edges", 0) or 0)
+                        native_summaries = int(jni_summary.get("native_method_summaries", 0) or 0)
+                        if call_graph_edges or native_summaries:
+                            print(
+                                "       crosslang: "
+                                f"call_graph_edges={call_graph_edges}, "
+                                f"native_summaries={native_summaries}"
+                            )
+                            backend_requested = jni_summary.get("cross_language_backend_requested")
+                            backend = jni_summary.get("cross_language_backend")
+                            status = jni_summary.get("cross_language_status")
+                            if backend_requested:
+                                print(f"       backend requested: {backend_requested}")
+                            if backend:
+                                print(f"       backend: {backend}")
+                            if status:
+                                print(f"       crosslang status: {status}")
+                            if jni_summary.get("compile_commands_used"):
+                                print("       compile_commands: detected")
+                            if jni_summary.get("taie_facts_loaded"):
+                                print(f"       Tai-e facts: {jni_summary.get('taie_facts_source')}")
+                            if jni_summary.get("svf_output_loaded"):
+                                print(f"       SVF output: {jni_summary.get('svf_output_source')}")
+                            if jni_summary.get("impact_available"):
+                                impact_delta = jni_summary.get("impact_delta", {}) if isinstance(jni_summary.get("impact_delta"), dict) else {}
+                                impact_baseline = jni_summary.get("impact_baseline", {}) if isinstance(jni_summary.get("impact_baseline"), dict) else {}
+                                impact_effective = jni_summary.get("impact_effective", {}) if isinstance(jni_summary.get("impact_effective"), dict) else {}
+                                baseline_edges = int(impact_baseline.get("jni_call_graph_edges", 0) or 0)
+                                effective_edges = int(impact_effective.get("jni_call_graph_edges", 0) or 0)
+                                baseline_points = int(impact_baseline.get("points_to_bindings", 0) or 0)
+                                effective_points = int(impact_effective.get("points_to_bindings", 0) or 0)
+                                baseline_summaries = int(impact_baseline.get("native_method_summaries", 0) or 0)
+                                effective_summaries = int(impact_effective.get("native_method_summaries", 0) or 0)
+                                delta_edges = int(impact_delta.get("jni_call_graph_edges", effective_edges - baseline_edges) or 0)
+                                delta_points = int(impact_delta.get("points_to_bindings", effective_points - baseline_points) or 0)
+                                delta_summaries = int(impact_delta.get("native_method_summaries", effective_summaries - baseline_summaries) or 0)
+                                print(
+                                    "       impact vs heuristic: "
+                                    f"edges {baseline_edges}->{effective_edges} ({delta_edges:+d}), "
+                                    f"points_to {baseline_points}->{effective_points} ({delta_points:+d}), "
+                                    f"summaries {baseline_summaries}->{effective_summaries} ({delta_summaries:+d})"
+                                )
+                            elif jni_summary.get("impact_status") == "degraded_fallback":
+                                print("       impact vs heuristic: unavailable (degraded_fallback)")
+                        if jni_summary.get("risk_total", 0):
+                            print(f"       risk patterns: {_format_count_map(jni_summary.get('risk_counts', {}), max_items=6)}")
+                        libs = jni_summary.get("jni_libraries", [])
+                        if isinstance(libs, list) and libs:
+                            print(f"       libraries: {', '.join(str(lib) for lib in libs[:6])}")
+                        symbol_hits = int(jni_summary.get("symbol_hits", 0) or 0)
+                        if symbol_hits:
+                            print(
+                                "       symbol scan: "
+                                f"{symbol_hits} JNI symbols"
+                                + (
+                                    f" via {jni_summary.get('symbol_scan_tool')}"
+                                    if jni_summary.get("symbol_scan_tool")
+                                    else ""
+                                )
+                            )
+                        if args.html_report:
+                            print(f"       UI proof: {Path(args.html_report).expanduser() / 'index.html'} (JNI Binding Resolution section)")
                     
                     # Display CF-Explainer recommendations if available
                     if fw_result and 'cf_explanation' in fw_result:
@@ -1477,6 +1989,8 @@ def main():
                         'confidence_breakdown': result.confidence_breakdown or {}
                     }
                 }
+                if jni_summary:
+                    result_dict["jni_summary"] = jni_summary
                 sink_preset = getattr(args, "sink_signature_preset", None)
                 if sink_preset:
                     result_dict.setdefault("analysis_config", {})["sink_signature_preset"] = sink_preset
@@ -1489,6 +2003,31 @@ def main():
                     result_dict.setdefault("evidence", fw_result.get("evidence", {}))
                     result_dict.setdefault("technical_details", fw_result.get("technical_details", {}))
                     result_dict.setdefault("cpg", fw_result.get("cpg", {}))
+                    # Preserve confidence-fusion/CESCL diagnostics for HTML confidence table.
+                    for scalar_key in (
+                        "confidence_logit_only",
+                        "heuristic_confidence",
+                        "traditional_confidence",
+                        "bayesian_confidence",
+                        "gnn_confidence",
+                        "gnn_confidence_logit_only",
+                        "gnn_uncertainty",
+                        "cescl_available",
+                        "cescl_ood_score",
+                        "cescl_calibrated_confidence",
+                        "cescl_is_ood",
+                    ):
+                        if scalar_key in fw_result:
+                            result_dict[scalar_key] = fw_result.get(scalar_key)
+                    for object_key in (
+                        "confidence_fusion",
+                        "confidence_fusion_logit_only",
+                        "cescl_prototype_probs",
+                        "cescl_distances",
+                        "cescl_blended_probs",
+                    ):
+                        if object_key in fw_result:
+                            result_dict[object_key] = fw_result.get(object_key)
                     if "taint_graph" in fw_result:
                         result_dict["taint_graph"] = fw_result["taint_graph"]
                     if "soundness_validation" in fw_result:
@@ -1520,6 +2059,52 @@ def main():
                         "enabled": bool(native_jni.get("enabled", False)),
                         "jni_methods": int(native_jni.get("jni_methods", 0) or 0),
                         "taint_transfers": int(native_jni.get("taint_transfers", 0) or 0),
+                        "resolved_bindings": len(native_jni.get("resolved_bindings", []))
+                        if isinstance(native_jni.get("resolved_bindings"), list)
+                        else 0,
+                        "unresolved_bindings": len(native_jni.get("unresolved_bindings", []))
+                        if isinstance(native_jni.get("unresolved_bindings"), list)
+                        else 0,
+                        "dynamic_registrations": len(native_jni.get("dynamic_registrations", []))
+                        if isinstance(native_jni.get("dynamic_registrations"), list)
+                        else 0,
+                        "binding_coverage": native_jni.get("binding_coverage", {})
+                        if isinstance(native_jni.get("binding_coverage"), dict)
+                        else {},
+                        "invocation_api_usage": native_jni.get("invocation_api_usage", {})
+                        if isinstance(native_jni.get("invocation_api_usage"), dict)
+                        else {},
+                        "callback_api_usage": native_jni.get("callback_api_usage", {})
+                        if isinstance(native_jni.get("callback_api_usage"), dict)
+                        else {},
+                        "jni_call_graph_edges": len(native_jni.get("jni_call_graph", []))
+                        if isinstance(native_jni.get("jni_call_graph"), list)
+                        else 0,
+                        "native_method_summaries": len(native_jni.get("native_method_summaries", []))
+                        if isinstance(native_jni.get("native_method_summaries"), list)
+                        else 0,
+                        "cross_language_backend_requested": native_jni.get("cross_language_backend_requested"),
+                        "cross_language_backend": native_jni.get("cross_language_backend"),
+                        "cross_language_status": native_jni.get("cross_language_status"),
+                        "crosslang_impact_available": bool(
+                            native_jni.get("crosslang_impact", {}).get("available", False)
+                            if isinstance(native_jni.get("crosslang_impact"), dict)
+                            else False
+                        ),
+                        "crosslang_impact": native_jni.get("crosslang_impact", {})
+                        if isinstance(native_jni.get("crosslang_impact"), dict)
+                        else {},
+                        "compile_commands_used": bool(native_jni.get("compile_commands_used", False)),
+                        "taie_facts_loaded": bool(
+                            native_jni.get("taie_facts", {}).get("loaded", False)
+                            if isinstance(native_jni.get("taie_facts"), dict)
+                            else False
+                        ),
+                        "svf_output_loaded": bool(
+                            native_jni.get("svf_output", {}).get("loaded", False)
+                            if isinstance(native_jni.get("svf_output"), dict)
+                            else False
+                        ),
                     },
                     "context_sensitive": {
                         "contexts_tracked": int(context_sensitive.get("contexts_tracked", 0) or 0),
@@ -1575,6 +2160,85 @@ def main():
             if 'detection_method' in r:
                 methods.add(r['detection_method'])
         print(f"🔍 Detection Methods Used: {', '.join(methods)}")
+
+        jni_summaries = [r.get("jni_summary", {}) for r in results if isinstance(r.get("jni_summary", {}), dict) and r.get("jni_summary")]
+        if jni_summaries:
+            total_methods = sum(int(s.get("jni_methods", 0) or 0) for s in jni_summaries)
+            total_transfers = sum(int(s.get("taint_transfers", 0) or 0) for s in jni_summaries)
+            total_resolved = sum(int(s.get("resolved_bindings", 0) or 0) for s in jni_summaries)
+            total_dynamic = sum(int(s.get("dynamic_registrations", 0) or 0) for s in jni_summaries)
+            total_call_graph_edges = sum(int(s.get("jni_call_graph_edges", 0) or 0) for s in jni_summaries)
+            total_native_summaries = sum(int(s.get("native_method_summaries", 0) or 0) for s in jni_summaries)
+            invocation_totals: Dict[str, int] = {}
+            callback_totals: Dict[str, int] = {}
+            coverage_totals: Dict[str, int] = {}
+            backend_names = set()
+            compile_db_count = 0
+            taie_loaded_count = 0
+            svf_loaded_count = 0
+            status_counts: Dict[str, int] = {}
+            impact_readouts = 0
+            impact_delta_edges_total = 0
+            impact_delta_points_total = 0
+            impact_delta_summaries_total = 0
+            impact_delta_total_edges_total = 0
+            for summary in jni_summaries:
+                for key, value in (summary.get("invocation_api_usage", {}) or {}).items():
+                    invocation_totals[str(key)] = invocation_totals.get(str(key), 0) + int(value or 0)
+                for key, value in (summary.get("callback_api_usage", {}) or {}).items():
+                    callback_totals[str(key)] = callback_totals.get(str(key), 0) + int(value or 0)
+                for key, value in (summary.get("binding_coverage", {}) or {}).items():
+                    coverage_totals[str(key)] = coverage_totals.get(str(key), 0) + int(value or 0)
+                if summary.get("cross_language_backend"):
+                    backend_names.add(str(summary.get("cross_language_backend")))
+                if summary.get("compile_commands_used"):
+                    compile_db_count += 1
+                if summary.get("taie_facts_loaded"):
+                    taie_loaded_count += 1
+                if summary.get("svf_output_loaded"):
+                    svf_loaded_count += 1
+                status = summary.get("cross_language_status")
+                if status:
+                    status_counts[str(status)] = status_counts.get(str(status), 0) + 1
+                if summary.get("impact_available"):
+                    impact_readouts += 1
+                    impact_delta = summary.get("impact_delta", {}) if isinstance(summary.get("impact_delta"), dict) else {}
+                    try:
+                        impact_delta_edges_total += int(impact_delta.get("jni_call_graph_edges", 0) or 0)
+                        impact_delta_points_total += int(impact_delta.get("points_to_bindings", 0) or 0)
+                        impact_delta_summaries_total += int(impact_delta.get("native_method_summaries", 0) or 0)
+                        impact_delta_total_edges_total += int(impact_delta.get("total_edges", 0) or 0)
+                    except Exception:
+                        pass
+            print(
+                "🧷 JNI Evidence Summary: "
+                f"methods={total_methods}, transfers={total_transfers}, "
+                f"resolved_bindings={total_resolved}, dynamic_registrations={total_dynamic}"
+            )
+            print(f"   ↳ Binding coverage: {_format_count_map(coverage_totals, max_items=6)}")
+            print(f"   ↳ Invocation APIs: {_format_count_map(invocation_totals, max_items=6)}")
+            print(f"   ↳ Callback APIs: {_format_count_map(callback_totals, max_items=6)}")
+            if total_call_graph_edges or total_native_summaries:
+                print(
+                    "   ↳ Crosslang: "
+                    f"call_graph_edges={total_call_graph_edges}, "
+                    f"native_summaries={total_native_summaries}, "
+                    f"compile_commands_hits={compile_db_count}, "
+                    f"taie_hits={taie_loaded_count}, svf_hits={svf_loaded_count}"
+                )
+                if backend_names:
+                    print(f"   ↳ Crosslang backend(s): {', '.join(sorted(backend_names))}")
+                if status_counts:
+                    print(f"   ↳ Crosslang status: {_format_count_map(status_counts, max_items=4)}")
+                if impact_readouts:
+                    print(
+                        "   ↳ Impact vs heuristic: "
+                        f"runs={impact_readouts}, "
+                        f"Δcall_graph_edges={impact_delta_edges_total:+d}, "
+                        f"Δpoints_to_bindings={impact_delta_points_total:+d}, "
+                        f"Δnative_summaries={impact_delta_summaries_total:+d}, "
+                        f"Δtotal_edges={impact_delta_total_edges_total:+d}"
+                    )
     
     # Auto-enable graphs for HTML report
     if args.html_report and not (args.export_dfg or args.export_cfg or args.export_pdg):
@@ -1736,7 +2400,22 @@ def main():
                     'rl_prioritization': config.enable_rl_prioritization,
                     'property_testing': config.enable_property_testing,
                     'taint_tracking': config.enable_taint_tracking,
-                    'parallel_workers': config.parallel_workers
+                    'parallel_workers': config.parallel_workers,
+                    'jni': {
+                        'enabled': bool(args.native_jni),
+                        'mode': args.jni_mode,
+                        'spectrum_mode': bool(getattr(args, "jni_spectrum", False)),
+                        'native_root': args.jni_native_root,
+                        'compile_commands': args.jni_compile_commands,
+                        'crosslang_backend': args.jni_crosslang_backend,
+                        'taie_facts': args.jni_taie_facts,
+                        'svf_output': args.jni_svf_output,
+                        'fail_closed': bool(args.jni_fail_closed),
+                        'binary': args.jni_binary,
+                        'symbol_tool': args.jni_symbol_tool,
+                        'resolve_register_natives': bool(args.jni_resolve_register_natives),
+                        'callbacks_enabled': not bool(args.jni_disable_callbacks),
+                    },
                 }
             },
             'results': results

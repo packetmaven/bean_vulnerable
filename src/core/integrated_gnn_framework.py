@@ -1379,6 +1379,17 @@ class IntegratedGNNFramework:
         enable_implicit_flows: bool = True,
         enable_path_sensitive: bool = True,
         enable_native_jni: bool = True,
+        jni_mode: str = "heuristic",
+        jni_native_root: Optional[str] = None,
+        jni_resolve_register_natives: bool = False,
+        jni_disable_callbacks: bool = False,
+        jni_binary: Optional[str] = None,
+        jni_symbol_tool: Optional[str] = None,
+        jni_compile_commands: Optional[str] = None,
+        jni_crosslang_backend: str = "auto",
+        jni_taie_facts: Optional[str] = None,
+        jni_svf_output: Optional[str] = None,
+        jni_fail_closed: bool = False,
         enable_tai_e: bool = False,
         tai_e_home: Optional[str] = None,
         tai_e_cs: str = "1-obj",
@@ -1407,6 +1418,17 @@ class IntegratedGNNFramework:
         self.gnn_checkpoint = gnn_checkpoint
         self.gnn_checkpoint_paths = self._normalize_checkpoint_paths(gnn_checkpoint)
         self.gnn_weights_loaded = False
+        self.jni_mode = jni_mode
+        self.jni_native_root = jni_native_root
+        self.jni_resolve_register_natives = jni_resolve_register_natives
+        self.jni_disable_callbacks = jni_disable_callbacks
+        self.jni_binary = jni_binary
+        self.jni_symbol_tool = jni_symbol_tool
+        self.jni_compile_commands = jni_compile_commands
+        self.jni_crosslang_backend = jni_crosslang_backend
+        self.jni_taie_facts = jni_taie_facts
+        self.jni_svf_output = jni_svf_output
+        self.jni_fail_closed = jni_fail_closed
         self.gnn_weights_loaded_count = 0
         self._gnn_trace_enabled = os.getenv("BEAN_VULN_TRACE_GNN", "").lower() in {"1", "true", "yes", "on"}
         self._gnn_forward_called = False
@@ -1459,6 +1481,17 @@ class IntegratedGNNFramework:
                 enable_implicit_flows=enable_implicit_flows,
                 enable_path_sensitive=enable_path_sensitive,
                 enable_native_jni=enable_native_jni,
+                jni_mode=jni_mode,
+                jni_native_root=jni_native_root,
+                jni_resolve_register_natives=jni_resolve_register_natives,
+                jni_disable_callbacks=jni_disable_callbacks,
+                jni_binary=jni_binary,
+                jni_symbol_tool=jni_symbol_tool,
+                jni_compile_commands=jni_compile_commands,
+                jni_crosslang_backend=jni_crosslang_backend,
+                jni_taie_facts=jni_taie_facts,
+                jni_svf_output=jni_svf_output,
+                jni_fail_closed=jni_fail_closed,
             )
             self.logger.info("✅ Comprehensive Taint Tracking initialized (external module)")
         except ImportError:

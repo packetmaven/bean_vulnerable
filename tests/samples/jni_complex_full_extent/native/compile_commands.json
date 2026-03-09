@@ -1,0 +1,7 @@
+[
+  {
+    "directory": ".",
+    "file": "jni_complex_full_extent.c",
+    "command": "clang -c jni_complex_full_extent.c -o jni_complex_full_extent.o"
+  }
+]

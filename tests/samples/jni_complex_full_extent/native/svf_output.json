@@ -1,0 +1,28 @@
+{
+  "native_call_graph": [
+    {
+      "source": "native:nativeExecuteImpl",
+      "target": "native:system"
+    },
+    {
+      "source": "native:nativeReadFileImpl",
+      "target": "native:fopen"
+    },
+    {
+      "source": "native:nativeCallbackExecImpl",
+      "target": "native:CallObjectMethod"
+    },
+    {
+      "source": "native:nativeReflectInvokeImpl",
+      "target": "native:CallStaticObjectMethod"
+    }
+  ],
+  "points_to": {
+    "native_aliases": {
+      "selectedRead": [
+        "nativeReadFileImpl",
+        "nativeExecuteImpl"
+      ]
+    }
+  }
+}

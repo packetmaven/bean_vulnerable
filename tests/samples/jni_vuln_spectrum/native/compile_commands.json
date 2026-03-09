@@ -1,0 +1,7 @@
+[
+  {
+    "directory": ".",
+    "file": "tests/samples/jni_vuln_spectrum/native/jni_vuln_spectrum.c",
+    "command": "clang -I. -c tests/samples/jni_vuln_spectrum/native/jni_vuln_spectrum.c -o jni_vuln_spectrum.o"
+  }
+]

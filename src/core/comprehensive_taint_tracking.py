@@ -387,6 +387,17 @@ class ComprehensiveTaintTracker:
         enable_implicit_flows: bool = True,
         enable_path_sensitive: bool = True,
         enable_native_jni: bool = True,
+        jni_mode: str = "heuristic",
+        jni_native_root: Optional[str] = None,
+        jni_resolve_register_natives: bool = False,
+        jni_disable_callbacks: bool = False,
+        jni_binary: Optional[str] = None,
+        jni_symbol_tool: Optional[str] = None,
+        jni_compile_commands: Optional[str] = None,
+        jni_crosslang_backend: str = "auto",
+        jni_taie_facts: Optional[str] = None,
+        jni_svf_output: Optional[str] = None,
+        jni_fail_closed: bool = False,
     ):
         self.logger = logging.getLogger(__name__)
         self.alias_analyzer = alias_analyzer or EnhancedAliasAnalyzer()
@@ -395,6 +406,17 @@ class ComprehensiveTaintTracker:
         self.enable_implicit_flows = enable_implicit_flows
         self.enable_path_sensitive = enable_path_sensitive
         self.enable_native_jni = enable_native_jni
+        self.jni_mode = jni_mode
+        self.jni_native_root = jni_native_root
+        self.jni_resolve_register_natives = jni_resolve_register_natives
+        self.jni_disable_callbacks = jni_disable_callbacks
+        self.jni_binary = jni_binary
+        self.jni_symbol_tool = jni_symbol_tool
+        self.jni_compile_commands = jni_compile_commands
+        self.jni_crosslang_backend = jni_crosslang_backend
+        self.jni_taie_facts = jni_taie_facts
+        self.jni_svf_output = jni_svf_output
+        self.jni_fail_closed = jni_fail_closed
         self.tainted_variables: Set[str] = set()
         self.sanitized_variables: Set[str] = set()
         self.taint_flows: List[Dict[str, Any]] = []
@@ -415,9 +437,35 @@ class ComprehensiveTaintTracker:
             'infeasible_paths': []
         }
         self.native_code_data: Dict[str, Any] = {
+            'analysis_mode': jni_mode,
             'jni_methods': [],
-            'taint_transfers': []
+            'jni_libraries': [],
+            'resolved_bindings': [],
+            'unresolved_bindings': [],
+            'dynamic_registrations': [],
+            'register_natives_calls': [],
+            'taint_transfers': [],
+            'jni_api_usage': {},
+            'invocation_api_usage': {},
+            'callback_api_usage': {},
+            'callback_details': [],
+            'symbol_scan': {},
+            'binding_coverage': {},
+            'native_risk_patterns': {},
+            'jni_call_graph': [],
+            'jni_points_to': {},
+            'native_method_summaries': [],
+            'crosslang_stats': {},
+            'cross_language_backend_requested': jni_crosslang_backend,
+            'cross_language_backend': None,
+            'cross_language_status': 'not_run',
+            'crosslang_impact': {},
+            'taie_facts': {},
+            'svf_output': {},
+            'compile_commands_used': False,
+            'errors': [],
         }
+        self._jni_engine = None
         self.interprocedural_data: Dict[str, Any] = {
             'methods_analyzed': set(),
             'methods_with_tainted_params': set(),
@@ -451,7 +499,7 @@ class ComprehensiveTaintTracker:
         if self.enable_path_sensitive:
             self._track_path_sensitive(lines)
         if self.enable_native_jni:
-            self._track_native_code(lines)
+            self._track_native_code(source_code, lines, source_path)
         self._track_interprocedural(lines)
         self._detect_sanitizers_advanced(lines)
         self._detect_template_engines(lines)
@@ -862,6 +910,7 @@ class ComprehensiveTaintTracker:
         vuln_types: Optional[List[str]] = None,
         source_role: Optional[str] = None,
         target_role: Optional[str] = None,
+        edge_metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
         method_name = self.method_by_line.get(int(line_number))
         edge = {
@@ -874,6 +923,8 @@ class ComprehensiveTaintTracker:
             "vuln_types": list(vuln_types or []),
             "is_sanitized": False,
         }
+        if edge_metadata:
+            edge.update({k: v for k, v in edge_metadata.items() if v is not None})
         self.taint_flow_edges.append(edge)
         self._register_node(source, line_number, method_name, role=source_role or "tainted", vuln_types=vuln_types)
         self._register_node(target, line_number, method_name, role=target_role or "tainted", vuln_types=vuln_types)
@@ -1132,54 +1183,104 @@ class ComprehensiveTaintTracker:
                 
                 self.logger.debug(f"Path-sensitive: branching point @ L{i}")
     
-    def _track_native_code(self, lines: List[str]):
+    def _track_native_code(self, source_code: str, lines: List[str], source_path: Optional[str]):
         """
-        Track JNI (Java Native Interface) taint transfers
-        Detects native method declarations and calls
+        Track JNI (Java Native Interface) taint transfers.
+        Uses JNI surface discovery + optional binding resolution.
         """
-        for i, line in enumerate(lines, 1):
-            stripped = line.strip()
-            
-            # Detect native method declarations
-            if 'native' in stripped:
-                native_match = re.search(r'native\s+\w+\s+(\w+)\s*\(([^)]*)\)', stripped)
-                if native_match:
-                    method_name = native_match.group(1)
-                    params = native_match.group(2)
-                    
-                    self.native_code_data['jni_methods'].append({
-                        'name': method_name,
-                        'line': i,
-                        'params': params
-                    })
-                    
-                    # Check if native method receives tainted parameters
-                    if params:
-                        param_vars = [p.strip().split()[-1] for p in params.split(',') if p.strip()]
-                        tainted_params = [v for v in param_vars if v in self.tainted_variables]
-                        
-                        if tainted_params:
-                            self.native_code_data['taint_transfers'].append({
-                                'method': method_name,
-                                'line': i,
-                                'tainted_params': tainted_params,
-                                'direction': 'java_to_native'
-                            })
-                            self.logger.debug(f"Native: taint transfer to {method_name} @ L{i}")
-            
-            # Detect calls to native methods (return values may be tainted)
-            for jni_method in self.native_code_data['jni_methods']:
-                if jni_method['name'] in line:
-                    call_match = re.search(rf'(\w+)\s*=\s*{jni_method["name"]}\s*\(', line)
-                    if call_match:
-                        result_var = call_match.group(1)
-                        self.native_code_data['taint_transfers'].append({
-                            'method': jni_method['name'],
-                            'line': i,
-                            'result_var': result_var,
-                            'direction': 'native_to_java'
-                        })
-                        self.logger.debug(f"Native: taint transfer from {jni_method['name']} -> {result_var} @ L{i}")
+        try:
+            from .jni.jni_taint_engine import JniTaintEngine
+        except Exception as exc:
+            self.logger.debug(f"JNI engine unavailable: {exc}")
+            return
+
+        if not self._jni_engine:
+            self._jni_engine = JniTaintEngine(
+                jni_mode=self.jni_mode,
+                native_root=self.jni_native_root,
+                resolve_register_natives=self.jni_resolve_register_natives,
+                disable_callbacks=self.jni_disable_callbacks,
+                binary_path=self.jni_binary,
+                symbol_tool=self.jni_symbol_tool,
+                compile_commands_path=self.jni_compile_commands,
+                crosslang_backend=self.jni_crosslang_backend,
+                taie_facts_path=self.jni_taie_facts,
+                svf_output_path=self.jni_svf_output,
+                fail_closed=self.jni_fail_closed,
+            )
+
+        analysis = self._jni_engine.analyze(source_code, self.tainted_variables)
+        if not isinstance(analysis, dict):
+            return
+
+        self.native_code_data.update(analysis)
+        transfers = analysis.get("taint_transfers", [])
+
+        for transfer in transfers:
+            if not isinstance(transfer, dict):
+                continue
+            direction = transfer.get("direction")
+            line_number = int(transfer.get("line", 0) or 0)
+            method = transfer.get("method", "native")
+            native_node = f"Native:{method}"
+
+            if direction == "java_to_native":
+                tainted_params = transfer.get("tainted_params") or []
+                for var in tainted_params:
+                    self._record_taint_edge(
+                        source=str(var),
+                        target=native_node,
+                        line_number=line_number or 1,
+                        kind="jni",
+                        reason="jni:java_to_native",
+                        source_role="tainted",
+                        target_role="jni",
+                        edge_metadata={
+                            "binding_type": transfer.get("binding_type"),
+                            "signature": transfer.get("signature"),
+                            "resolver": transfer.get("resolver"),
+                        },
+                    )
+            elif direction == "native_to_java":
+                result_var = transfer.get("result_var")
+                if result_var:
+                    self._record_taint_edge(
+                        source=native_node,
+                        target=str(result_var),
+                        line_number=line_number or 1,
+                        kind="jni",
+                        reason="jni:native_to_java",
+                        source_role="jni",
+                        target_role="tainted",
+                        edge_metadata={
+                            "binding_type": transfer.get("binding_type"),
+                            "signature": transfer.get("signature"),
+                            "resolver": transfer.get("resolver"),
+                        },
+                    )
+            elif direction == "native_callback":
+                callback_apis = transfer.get("callback_apis") or []
+                callback_node = (
+                    f"JavaCallback:{method}:{','.join(str(api) for api in callback_apis[:2])}"
+                    if callback_apis
+                    else f"JavaCallback:{method}"
+                )
+                self._record_taint_edge(
+                    source=native_node,
+                    target=callback_node,
+                    line_number=line_number or 1,
+                    kind="jni",
+                    reason="jni:native_callback",
+                    source_role="jni",
+                    target_role="sink",
+                    edge_metadata={
+                        "binding_type": transfer.get("binding_type"),
+                        "signature": transfer.get("signature"),
+                        "resolver": transfer.get("resolver"),
+                        "effect": transfer.get("effect"),
+                        "callback_apis": callback_apis,
+                    },
+                )
     
     def _track_interprocedural(self, lines: List[str]):
         """
@@ -1310,8 +1411,14 @@ class ComprehensiveTaintTracker:
         infeasible_paths = len(self.path_sensitive_data['infeasible_paths'])
         
         # Calculate native code metrics
-        jni_methods_count = len(self.native_code_data['jni_methods'])
-        taint_transfers_count = len(self.native_code_data['taint_transfers'])
+        jni_methods_detail = self.native_code_data.get('jni_methods', [])
+        taint_transfers_detail = self.native_code_data.get('taint_transfers', [])
+        jni_methods_count = len(jni_methods_detail) if isinstance(jni_methods_detail, list) else int(jni_methods_detail or 0)
+        taint_transfers_count = (
+            len(taint_transfers_detail)
+            if isinstance(taint_transfers_detail, list)
+            else int(taint_transfers_detail or 0)
+        )
         
         # Calculate interprocedural metrics
         methods_analyzed = len(self.interprocedural_data['methods_analyzed'])
@@ -1365,10 +1472,37 @@ class ComprehensiveTaintTracker:
             },
             'native_code_analysis': {
                 'enabled': self.enable_native_jni,
+                'analysis_mode': self.native_code_data.get('analysis_mode', self.jni_mode),
                 'jni_methods': jni_methods_count,
                 'taint_transfers': taint_transfers_count,
-                'jni_method_details': self.native_code_data['jni_methods'],
-                'transfer_details': self.native_code_data['taint_transfers']
+                'jni_libraries': self.native_code_data.get('jni_libraries', []),
+                'resolved_bindings': self.native_code_data.get('resolved_bindings', []),
+                'unresolved_bindings': self.native_code_data.get('unresolved_bindings', []),
+                'dynamic_registrations': self.native_code_data.get('dynamic_registrations', []),
+                'register_natives_calls': self.native_code_data.get('register_natives_calls', []),
+                'jni_api_usage': self.native_code_data.get('jni_api_usage', {}),
+                'invocation_api_usage': self.native_code_data.get('invocation_api_usage', {}),
+                'callback_api_usage': self.native_code_data.get('callback_api_usage', {}),
+                'callback_details': self.native_code_data.get('callback_details', []),
+                'symbol_scan': self.native_code_data.get('symbol_scan', {}),
+                'binding_coverage': self.native_code_data.get('binding_coverage', {}),
+                'native_risk_patterns': self.native_code_data.get('native_risk_patterns', {}),
+                'jni_call_graph': self.native_code_data.get('jni_call_graph', []),
+                'jni_points_to': self.native_code_data.get('jni_points_to', {}),
+                'native_method_summaries': self.native_code_data.get('native_method_summaries', []),
+                'crosslang_stats': self.native_code_data.get('crosslang_stats', {}),
+                'cross_language_backend_requested': self.native_code_data.get(
+                    'cross_language_backend_requested', self.jni_crosslang_backend
+                ),
+                'cross_language_backend': self.native_code_data.get('cross_language_backend'),
+                'cross_language_status': self.native_code_data.get('cross_language_status', 'not_run'),
+                'crosslang_impact': self.native_code_data.get('crosslang_impact', {}),
+                'taie_facts': self.native_code_data.get('taie_facts', {}),
+                'svf_output': self.native_code_data.get('svf_output', {}),
+                'compile_commands_used': bool(self.native_code_data.get('compile_commands_used', False)),
+                'errors': self.native_code_data.get('errors', []),
+                'jni_method_details': jni_methods_detail,
+                'transfer_details': taint_transfers_detail,
             },
             'interprocedural_analysis': {
                 'methods_analyzed': methods_analyzed,

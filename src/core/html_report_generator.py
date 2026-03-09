@@ -534,6 +534,111 @@ def _get_css_styles() -> str:
             gap: 20px;
             margin: 30px 0;
         }
+
+        .table-wrap {
+            overflow-x: auto;
+            border: 1px solid #e6eaf0;
+            border-radius: 12px;
+            background: #ffffff;
+            box-shadow: 0 6px 20px rgba(30, 42, 62, 0.08);
+        }
+
+        .jni-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+        }
+
+        .jni-table th {
+            text-align: left;
+            padding: 12px 14px;
+            background: linear-gradient(135deg, #f3f7ff 0%, #e8f0ff 100%);
+            color: #1f2d3d;
+            font-weight: 700;
+            border-bottom: 1px solid #e6eaf0;
+            letter-spacing: 0.02em;
+        }
+
+        .jni-table td {
+            padding: 10px 14px;
+            border-bottom: 1px solid #f0f2f6;
+            color: #2c3e50;
+            vertical-align: top;
+        }
+
+        .jni-table tr:nth-child(even) td {
+            background: #fafbff;
+        }
+
+        .jni-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+
+        .jni-badge.resolved {
+            background: rgba(46, 204, 113, 0.15);
+            color: #1e8c4a;
+        }
+
+        .jni-badge.unresolved {
+            background: rgba(243, 156, 18, 0.18);
+            color: #a06000;
+        }
+
+        .jni-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin: 12px 0 16px;
+            color: #5f6b7a;
+            font-size: 13px;
+        }
+
+        .jni-pill {
+            background: #f0f4ff;
+            color: #3256a8;
+            padding: 4px 10px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .jni-coverage-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 10px;
+            margin: 10px 0 14px;
+        }
+
+        .jni-coverage-item {
+            background: linear-gradient(135deg, #f7f9ff 0%, #eef4ff 100%);
+            border: 1px solid #d9e4ff;
+            border-radius: 10px;
+            padding: 10px 12px;
+        }
+
+        .jni-coverage-item .label {
+            display: block;
+            color: #4a5e86;
+            font-size: 12px;
+            margin-bottom: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            font-weight: 700;
+        }
+
+        .jni-coverage-item .value {
+            color: #1f2d3d;
+            font-size: 20px;
+            font-weight: 800;
+        }
         
         .metric-card {
             background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
@@ -1314,6 +1419,37 @@ def _generate_advanced_analysis_section(implicit_flows, context_sensitive, path_
     native_label = "Disabled" if not native_enabled else (
         "Experimental" if (native_methods or native_transfers) else "Enabled (0)"
     )
+    native_mode = native_code.get("analysis_mode") if isinstance(native_code, dict) else None
+    resolved_bindings = native_code.get("resolved_bindings", []) if isinstance(native_code, dict) else []
+    unresolved_bindings = native_code.get("unresolved_bindings", []) if isinstance(native_code, dict) else []
+    binding_coverage = native_code.get("binding_coverage", {}) if isinstance(native_code, dict) else {}
+    dynamic_registrations = native_code.get("dynamic_registrations", []) if isinstance(native_code, dict) else []
+    jni_libraries = native_code.get("jni_libraries", []) if isinstance(native_code, dict) else []
+    jni_api_usage = native_code.get("jni_api_usage", {}) if isinstance(native_code, dict) else {}
+    invocation_api_usage = native_code.get("invocation_api_usage", {}) if isinstance(native_code, dict) else {}
+    callback_api_usage = native_code.get("callback_api_usage", {}) if isinstance(native_code, dict) else {}
+    symbol_scan = native_code.get("symbol_scan", {}) if isinstance(native_code, dict) else {}
+    native_risk_patterns = native_code.get("native_risk_patterns", {}) if isinstance(native_code, dict) else {}
+    jni_call_graph = native_code.get("jni_call_graph", []) if isinstance(native_code, dict) else []
+    jni_points_to = native_code.get("jni_points_to", {}) if isinstance(native_code, dict) else {}
+    native_method_summaries = native_code.get("native_method_summaries", []) if isinstance(native_code, dict) else []
+    crosslang_stats = native_code.get("crosslang_stats", {}) if isinstance(native_code, dict) else {}
+    crosslang_backend_requested = native_code.get("cross_language_backend_requested") if isinstance(native_code, dict) else None
+    crosslang_backend = native_code.get("cross_language_backend") if isinstance(native_code, dict) else None
+    crosslang_status = native_code.get("cross_language_status") if isinstance(native_code, dict) else None
+    taie_facts = native_code.get("taie_facts", {}) if isinstance(native_code, dict) else {}
+    svf_output = native_code.get("svf_output", {}) if isinstance(native_code, dict) else {}
+    compile_commands_used = bool(native_code.get("compile_commands_used", False)) if isinstance(native_code, dict) else False
+    if native_mode:
+        binding_note = ""
+        if isinstance(resolved_bindings, list) or isinstance(unresolved_bindings, list):
+            resolved_count = len(resolved_bindings) if isinstance(resolved_bindings, list) else 0
+            unresolved_count = len(unresolved_bindings) if isinstance(unresolved_bindings, list) else 0
+            if resolved_count or unresolved_count:
+                binding_note = f"resolved {resolved_count}, unresolved {unresolved_count}"
+        native_label = f"{native_label} | mode: {native_mode}"
+        if binding_note:
+            native_label = f"{native_label} | {binding_note}"
     inter_label = "Heuristic" if methods_analyzed else ("Enabled (0)" if inter_has_data else "Disabled")
 
     tai_e_meta = tai_e_meta if isinstance(tai_e_meta, dict) else {}
@@ -1395,6 +1531,185 @@ def _generate_advanced_analysis_section(implicit_flows, context_sensitive, path_
         </div>
     </div>
 """
+
+    # JNI bindings table (binding spectrum surface)
+    bindings_rows = []
+    max_rows = 16
+    resolved_list = resolved_bindings if isinstance(resolved_bindings, list) else []
+    unresolved_list = unresolved_bindings if isinstance(unresolved_bindings, list) else []
+    if not isinstance(binding_coverage, dict):
+        binding_coverage = {}
+    if not binding_coverage:
+        for entry in resolved_list:
+            if isinstance(entry, dict):
+                bt = str(entry.get("binding_type") or "unknown")
+                binding_coverage[bt] = binding_coverage.get(bt, 0) + 1
+    for entry in resolved_list[:max_rows]:
+        java_name = _escape_html(str(entry.get("java_name", "unknown")))
+        signature = _escape_html(str(entry.get("signature", "—")))
+        mangled = _escape_html(str(entry.get("mangled", "")))
+        native_func = _escape_html(str(entry.get("native_func", "")))
+        binding_type = _escape_html(str(entry.get("binding_type", "static")))
+        resolver = _escape_html(str(entry.get("resolver", "source_scan")))
+        evidence = _escape_html(str(entry.get("evidence", "")))
+        resolver_evidence = f"{resolver}: {evidence}" if evidence else resolver
+        file_path = _escape_html(str(entry.get("file", "")))
+        line = entry.get("line")
+        location = f"{file_path}:{line}" if file_path and line else (file_path or "—")
+        confidence = _escape_html(str(entry.get("confidence", "resolved")))
+        bindings_rows.append(
+            f"<tr><td><code>{java_name}</code></td><td><code>{signature}</code></td>"
+            f"<td>{binding_type}</td><td><code>{mangled}</code></td><td><code>{native_func}</code></td>"
+            f"<td>{resolver_evidence}</td><td>{location}</td>"
+            f"<td>{confidence}</td><td><span class=\"jni-badge resolved\">Resolved</span></td></tr>"
+        )
+    for entry in unresolved_list[: max(0, max_rows - len(bindings_rows))]:
+        java_name = _escape_html(str(entry.get("java_name", "unknown")))
+        signature = _escape_html(str(entry.get("signature", "—")))
+        mangled = _escape_html(str(entry.get("candidate", "")))
+        reason = _escape_html(str(entry.get("reason", "unresolved")))
+        bindings_rows.append(
+            f"<tr><td><code>{java_name}</code></td><td><code>{signature}</code></td>"
+            f"<td>—</td><td><code>{mangled}</code></td><td>—</td>"
+            f"<td>{reason}</td><td>—</td><td>{reason}</td>"
+            f"<td><span class=\"jni-badge unresolved\">Unresolved</span></td></tr>"
+        )
+
+    if native_has_data and (
+        bindings_rows
+        or jni_libraries
+        or jni_api_usage
+        or invocation_api_usage
+        or callback_api_usage
+        or dynamic_registrations
+        or jni_call_graph
+        or native_method_summaries
+    ):
+        libraries_text = ", ".join(_escape_html(str(lib)) for lib in jni_libraries) if jni_libraries else "none"
+        api_items = []
+        if isinstance(jni_api_usage, dict):
+            for api, count in sorted(jni_api_usage.items()):
+                api_items.append(f"<span class=\"jni-pill\">{_escape_html(str(api))} ×{count}</span>")
+        api_text = "".join(api_items) if api_items else "<span class=\"jni-pill\">no JNI APIs detected</span>"
+        invocation_items = []
+        if isinstance(invocation_api_usage, dict):
+            for api, count in sorted(invocation_api_usage.items()):
+                invocation_items.append(f"<span class=\"jni-pill\">{_escape_html(str(api))} ×{count}</span>")
+        invocation_text = "".join(invocation_items) if invocation_items else "<span class=\"jni-pill\">no invocation APIs detected</span>"
+        callback_items = []
+        if isinstance(callback_api_usage, dict):
+            for api, count in sorted(callback_api_usage.items()):
+                callback_items.append(f"<span class=\"jni-pill\">{_escape_html(str(api))} ×{count}</span>")
+        callback_text = "".join(callback_items) if callback_items else "<span class=\"jni-pill\">no callback APIs detected</span>"
+        symbol_count = 0
+        symbol_tool = "none"
+        if isinstance(symbol_scan, dict):
+            symbol_count = len(symbol_scan.get("jni_symbols", []) or [])
+            symbol_tool = _escape_html(str(symbol_scan.get("symbol_tool") or "none"))
+        call_graph_edges = len(jni_call_graph) if isinstance(jni_call_graph, list) else 0
+        summary_count = len(native_method_summaries) if isinstance(native_method_summaries, list) else 0
+        taie_loaded = bool(taie_facts.get("loaded", False)) if isinstance(taie_facts, dict) else False
+        taie_source = _escape_html(str(taie_facts.get("source_path") or "none")) if isinstance(taie_facts, dict) else "none"
+        svf_loaded = bool(svf_output.get("loaded", False)) if isinstance(svf_output, dict) else False
+        svf_source = _escape_html(str(svf_output.get("source_path") or "none")) if isinstance(svf_output, dict) else "none"
+        points_to_bindings = 0
+        if isinstance(jni_points_to, dict):
+            java_to_native = jni_points_to.get("java_to_native_bindings", {})
+            if isinstance(java_to_native, dict):
+                points_to_bindings = sum(len(v) for v in java_to_native.values() if isinstance(v, list))
+        crosslang_total_edges = 0
+        if isinstance(crosslang_stats, dict):
+            try:
+                crosslang_total_edges = int(crosslang_stats.get("total_edges", 0) or 0)
+            except Exception:
+                crosslang_total_edges = 0
+        risk_counts = {}
+        if isinstance(native_risk_patterns, dict):
+            risk_counts = native_risk_patterns.get("counts", {}) if isinstance(native_risk_patterns.get("counts"), dict) else {}
+        risk_total = 0
+        for value in risk_counts.values():
+            if isinstance(value, int):
+                risk_total += value
+            elif isinstance(value, str) and value.isdigit():
+                risk_total += int(value)
+        coverage_cards = []
+        for key, value in sorted(binding_coverage.items()):
+            coverage_cards.append(
+                f"<div class=\"jni-coverage-item\"><span class=\"label\">{_escape_html(str(key))}</span>"
+                f"<span class=\"value\">{_escape_html(str(value))}</span></div>"
+            )
+        if not coverage_cards:
+            coverage_cards = ["<div class=\"jni-coverage-item\"><span class=\"label\">none</span><span class=\"value\">0</span></div>"]
+        overflow_note = ""
+        if len(resolved_list) + len(unresolved_list) > max_rows:
+            overflow_note = f"<p style=\"color:#7f8c8d; margin-top:8px;\">Showing first {max_rows} bindings.</p>"
+
+        html += f"""
+        <div class="section">
+            <h3 style="color: #2c3e50; font-size: 20px; margin-bottom: 10px;">🧷 JNI Binding Resolution</h3>
+            <p style="color:#6c7a89; margin-bottom: 10px;">
+                Native symbol matches and JNI boundary evidence extracted during analysis.
+            </p>
+            <div class="jni-meta">
+                <span><strong>Libraries:</strong> {libraries_text}</span>
+            </div>
+            <div class="jni-meta">
+                <span><strong>Coverage:</strong></span>
+            </div>
+            <div class="jni-coverage-grid">
+                {''.join(coverage_cards)}
+            </div>
+            <div class="jni-meta">
+                <span><strong>JNI API usage:</strong></span> {api_text}
+            </div>
+            <div class="jni-meta">
+                <span><strong>Invocation APIs:</strong></span> {invocation_text}
+            </div>
+            <div class="jni-meta">
+                <span><strong>Callback APIs:</strong></span> {callback_text}
+            </div>
+            <div class="jni-meta">
+                <span><strong>Dynamic registrations:</strong> {len(dynamic_registrations) if isinstance(dynamic_registrations, list) else 0}</span>
+                <span><strong>JNI symbols:</strong> {symbol_count} (tool: {symbol_tool})</span>
+                <span><strong>Risk hits:</strong> {risk_total}</span>
+            </div>
+            <div class="jni-meta">
+                <span><strong>Crosslang requested:</strong> {_escape_html(str(crosslang_backend_requested or "auto"))}</span>
+                <span><strong>Crosslang backend:</strong> {_escape_html(str(crosslang_backend or "heuristic"))}</span>
+                <span><strong>Status:</strong> {_escape_html(str(crosslang_status or "unknown"))}</span>
+                <span><strong>Call-graph edges:</strong> {call_graph_edges}</span>
+                <span><strong>Points-to bindings:</strong> {points_to_bindings}</span>
+                <span><strong>Native summaries:</strong> {summary_count}</span>
+                <span><strong>Crosslang stats edges:</strong> {crosslang_total_edges}</span>
+                <span><strong>compile_commands:</strong> {"yes" if compile_commands_used else "no"}</span>
+            </div>
+            <div class="jni-meta">
+                <span><strong>Tai-e facts:</strong> {"loaded" if taie_loaded else "missing"} ({taie_source})</span>
+                <span><strong>SVF output:</strong> {"loaded" if svf_loaded else "missing"} ({svf_source})</span>
+            </div>
+            <div class="table-wrap">
+                <table class="jni-table">
+                    <thead>
+                        <tr>
+                            <th>Java Method</th>
+                            <th>Signature</th>
+                            <th>Binding Type</th>
+                            <th>Mangled Symbol</th>
+                            <th>Native Func</th>
+                            <th>Resolver Evidence</th>
+                            <th>Location</th>
+                            <th>Confidence</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {''.join(bindings_rows)}
+                    </tbody>
+                </table>
+            </div>
+            {overflow_note}
+        </div>
+        """
     
     # Detailed sections if data exists
     if implicit_vars:

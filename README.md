@@ -427,7 +427,7 @@ Research-backed techniques from top-tier conferences (ACM 2024, Tai-e v0.5.1, FS
 
 **Enabling Path-Sensitive + Native (JNI) metrics**
 
-These counters are part of **Comprehensive Taint Tracking** and are **enabled by default** in both `bean-vuln` and `bean-vuln2`. You can explicitly control them with CLI flags:
+These counters are part of **Comprehensive Taint Tracking** and are **enabled by default** in both `bean-vuln` and `bean-vuln2`. For JNI, the default documented path is now `bean-vuln2 --jni-spectrum` (auto enables binding resolution + callback evidence + taint graph). You can still explicitly control them with CLI flags:
 
 - `--implicit-flows` / `--no-implicit-flows`
 - `--path-sensitive` / `--no-path-sensitive`
@@ -439,8 +439,14 @@ To surface the numbers, generate an HTML report or JSON output:
 # Path-sensitive sample (expects non-zero branches/feasible paths)
 bean-vuln tests/samples/VUL_PathSensitive.java --path-sensitive --html-report output
 
-# Native (JNI) sample (expects non-zero JNI methods/transfers)
-bean-vuln tests/samples/VUL_NativeCode.java --native-jni --html-report output
+# Native (JNI) default path (Phase 1+2 evidence in JSON + HTML)
+bean-vuln2 tests/samples/jni_vuln_spectrum/JNI_Vuln_Spectrum.java \
+  --jni-spectrum \
+  --jni-mode crosslang \
+  --jni-native-root tests/samples/jni_vuln_spectrum/native \
+  --html-report analysis/jni_vuln_spectrum_report \
+  --out analysis/jni_vuln_spectrum_report/result.json \
+  --summary
 
 # Implicit flow sample (expects non-zero control dependencies)
 bean-vuln tests/samples/VUL015_SessionFixation.java --implicit-flows --html-report output
@@ -793,6 +799,15 @@ bean-vuln2 file.java --summary --html-report output
 # Comprehensive analysis with ALL advanced features
 bean-vuln2 file.java --comprehensive --html-report output
 
+# Default JNI path (spectrum + cross-language evidence)
+bean-vuln2 tests/samples/jni_vuln_spectrum/JNI_Vuln_Spectrum.java \
+  --jni-spectrum \
+  --jni-mode crosslang \
+  --jni-native-root tests/samples/jni_vuln_spectrum/native \
+  --html-report analysis/jni_vuln_spectrum_report \
+  --out analysis/jni_vuln_spectrum_report/result.json \
+  --summary
+
 # Enable specific advanced features
 bean-vuln2 file.java \
   --hybrid-analysis \
@@ -891,6 +906,39 @@ bean-vuln file.java --html-report output --explain
 
 # Comprehensive scan (ensemble + advanced-features + spatial GNN + explain)
 bean-vuln file.java --html-report output --comprehensive
+```
+
+### **Default JNI Path (`bean-vuln2`)**
+Use this as the default documented JNI workflow (Phase 1 + Phase 2 evidence):
+
+```bash
+bean-vuln2 tests/samples/jni_vuln_spectrum/JNI_Vuln_Spectrum.java \
+  --jni-spectrum \
+  --jni-mode crosslang \
+  --jni-native-root tests/samples/jni_vuln_spectrum/native \
+  --jni-compile-commands tests/samples/jni_vuln_spectrum/native/compile_commands.json \
+  --html-report analysis/jni_vuln_spectrum_report \
+  --out analysis/jni_vuln_spectrum_report/result.json \
+  --summary
+```
+
+If `compile_commands.json` is not present, omit `--jni-compile-commands`; the CLI will still run using heuristic cross-language reconstruction.
+
+Strict research mode (fail-closed, no heuristic fallback):
+
+```bash
+bean-vuln2 tests/samples/jni_vuln_spectrum/JNI_Vuln_Spectrum.java \
+  --jni-spectrum \
+  --jni-mode crosslang \
+  --jni-crosslang-backend taie_svf \
+  --jni-taie-facts tests/samples/jni_vuln_spectrum/native/taie_facts.json \
+  --jni-svf-output tests/samples/jni_vuln_spectrum/native/svf_output.json \
+  --jni-fail-closed \
+  --jni-native-root tests/samples/jni_vuln_spectrum/native \
+  --jni-compile-commands tests/samples/jni_vuln_spectrum/native/compile_commands.json \
+  --html-report analysis/jni_phase2_strict_report \
+  --out analysis/jni_phase2_strict_report/result.json \
+  --summary
 ```
 
 ### **AEG-Lite Java Analyzer (Experimental)**
@@ -1606,6 +1654,136 @@ When you generate an HTML report, the **Findings** section includes a “Confide
 - GNN confidence (logit-only vs CESCL-blended when available)
 - CESCL OOD score + `cescl_is_ood`
 - fusion source (`confidence_fusion.source`) and OOD detection (`confidence_fusion.ood_detected`)
+
+### 4) CLI-integrated OOD/fusion readout (no post-processing script needed)
+
+`--summary` now prints the same high-value confidence diagnostics directly in CLI output for both:
+- `bean-vuln` (`core.bean_vuln_cli`)
+- `bean-vuln2` (`core.bean_vuln_cli_enhanced`)
+
+Printed fields include:
+- final confidence and heuristic confidence
+- fusion source (`heuristic_only`, `gnn_boost`, `gnn_calibrated`, `gnn_only`, `heuristic_only_ood`)
+- fusion OOD detection flag
+- CESCL availability, OOD score, OOD boolean, calibrated confidence
+
+Reproducible OOD-focused run (trained checkpoint + prototypes required):
+
+```bash
+CKPT="/absolute/path/to/best_model.pt"
+./bean_vuln2 tests/samples/VUL_OOD_HighConfidence_HeuristicOnlyOOD.java \
+  --comprehensive \
+  --gnn-checkpoint "$CKPT" \
+  --require-gnn \
+  --summary \
+  --out analysis/ood_high_confidence_with_ood.json
+```
+
+Full CESCL + cross-language JNI example using `bean_vuln2`:
+
+```bash
+cd /Users/seren3/bean_vulnerable && \
+./bean_vuln2 \
+  "tests/samples/jni_complex_full_extent/VUL_COMPLEX_MultiVulnerability_JNI.java" \
+  --comprehensive \
+  --summary \
+  --native-jni \
+  --jni-spectrum \
+  --jni-mode crosslang \
+  --jni-crosslang-backend taie_svf \
+  --jni-taie-facts "tests/samples/jni_complex_full_extent/native/taie_facts.json" \
+  --jni-svf-output "tests/samples/jni_complex_full_extent/native/svf_output.json" \
+  --jni-compile-commands "tests/samples/jni_complex_full_extent/native/compile_commands.json" \
+  --jni-native-root "tests/samples/jni_complex_full_extent/native" \
+  --jni-fail-closed \
+  --spatial-gnn \
+  --gnn-checkpoint "models/spatial_gnn/best_model.pt" \
+  --require-gnn \
+  --html-report "analysis/gnn_confidence_example_html" \
+  --out "analysis/gnn_confidence_example.json"
+```
+
+When OOD is detected, expected CLI semantics are:
+- `Fusion source: heuristic_only_ood`
+- `Fusion OOD detected: true`
+- `CESCL is OOD: true`
+- final confidence remains security-conservative (heuristic-preserving fallback)
+
+### 5) Heuristic-Only-OOD Triage Rubric + Analyst SOP (P1/P2/P3)
+
+Use this when all are true:
+- `cescl_available=true`
+- `cescl_is_ood=true`
+- `confidence_fusion.source=heuristic_only_ood`
+
+Operational assets:
+- Decision-flow diagram + one-page SOP: `docs/analyst_sop_heuristic_only_ood.md`
+- Machine-validation schema: `docs/schemas/heuristic_only_ood_triage.schema.json`
+- Example validated triage record: `docs/schemas/examples/heuristic_only_ood_triage.example.json`
+- Recommended: store each analyst triage as a JSON record validated against the schema
+
+Interpretation:
+- CESCL says "embedding is outside known prototype regions."
+- Fusion says "treat this as distribution-shift; keep heuristic decision path."
+- This is a **high-value manual-review queue** for potential 0-day-like findings, not automatic proof of a 0-day.
+
+#### Gate A: Telemetry integrity (must pass)
+- Same checkpoint + prototype bundle used across comparisons.
+- OOD threshold logged for the run.
+- No parser/framework fatal errors.
+- If these fail, do not assign P1/P2/P3 yet; mark as "telemetry invalid."
+
+#### Gate B: Novelty strength (CESCL OOD)
+Compute:
+- `ood_margin = cescl_ood_score - ood_threshold`
+- `ood_ratio = cescl_ood_score / ood_threshold`
+
+Use novelty bands:
+- `N0`: `ood_margin <= 0` (not OOD)
+- `N1`: `0 < ood_margin <= 0.03` (borderline OOD)
+- `N2`: `0.03 < ood_margin <= 0.10` (moderate novelty)
+- `N3`: `0.10 < ood_margin <= 0.25` (strong novelty)
+- `N4`: `ood_margin > 0.25` (extreme novelty)
+
+#### Gate C: Evidence strength (heuristic + taint)
+Use evidence bands:
+- `E0`: weak/no exploitable sink evidence
+- `E1`: sink present but sparse/noisy dataflow
+- `E2`: credible source->sink evidence with coherent taint paths
+- `E3`: strong exploit-relevant evidence (high-impact sink family + multiple flows + no effective sanitizer break)
+
+Signals that usually push to `E2/E3`:
+- High-impact sink family (`sql_injection`, `command_injection`, `deserialization`, `http_response_splitting`, etc.)
+- `severity` HIGH/CRITICAL
+- Non-trivial taint paths (`taint_flows` materially above zero)
+
+#### Gate D: Fusion safety behavior
+For OOD findings, expected secure behavior is:
+- `confidence_fusion.source = heuristic_only_ood`
+- final confidence approximately equals `heuristic_confidence`
+
+This confirms the system did not suppress strong static evidence due to model novelty.
+
+#### Gate E: Stability check
+Re-run 2-3 times (same checkpoint/prototypes/config):
+- `cescl_is_ood` remains true
+- fusion source remains `heuristic_only_ood`
+- vuln type/severity are stable
+
+If unstable, demote one priority level.
+
+#### Priority assignment
+- `P1` (High-value 0-day candidate queue): `N2+` and `E2+`, especially with HIGH/CRITICAL impact.
+- `P2` (Probable true positive, moderate novelty): OOD true with either borderline novelty or medium evidence.
+- `P3` (Watchlist): OOD true but weak evidence or unstable reruns.
+
+Default action policy:
+- `P1`: immediate senior review + exploitability validation + patch guidance.
+- `P2`: scheduled analyst review + sink/path confirmation.
+- `P3`: monitor and cluster with similar findings; revisit when repeated.
+
+One-page analyst template:
+- `docs/analyst_sop_heuristic_only_ood.md`
 
 ### Local Dynamic Engine Verification (JPF-SPF / JDart / JBSE)
 These engines require **Java 8** and native Z3 Java bindings.

@@ -1478,6 +1478,32 @@ def main():
                 f"Heuristic: {heuristic_conf:.3f}, GNN: {gnn_status}, "
                 f"Final: {confidence:.3f}, Vulnerable: {vulnerable}"
             )
+            fusion = result.get("confidence_fusion", {})
+            if isinstance(fusion, dict):
+                if fusion.get("source") is not None:
+                    print(f"      Fusion source: {fusion.get('source')}")
+                if "ood_detected" in fusion:
+                    print(
+                        "      Fusion OOD detected: "
+                        f"{str(bool(fusion.get('ood_detected'))).lower()}"
+                    )
+            if "cescl_available" in result:
+                print(
+                    "      CESCL available: "
+                    f"{str(bool(result.get('cescl_available'))).lower()}"
+                )
+            if isinstance(result.get("cescl_ood_score"), (int, float)):
+                print(f"      CESCL OOD score: {float(result.get('cescl_ood_score')):.4f}")
+            if "cescl_is_ood" in result:
+                print(
+                    "      CESCL is OOD: "
+                    f"{str(bool(result.get('cescl_is_ood'))).lower()}"
+                )
+            if isinstance(result.get("cescl_calibrated_confidence"), (int, float)):
+                print(
+                    "      CESCL calibrated confidence: "
+                    f"{float(result.get('cescl_calibrated_confidence')):.4f}"
+                )
         
         # Add metadata
         result.update({

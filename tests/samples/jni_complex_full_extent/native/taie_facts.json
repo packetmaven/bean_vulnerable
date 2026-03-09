@@ -1,0 +1,48 @@
+{
+  "call_graph": [
+    {
+      "source": "java:nativeReadFile",
+      "target": "native:nativeReadFileImpl",
+      "kind": "taie_java_to_native"
+    },
+    {
+      "source": "java:nativeExecute",
+      "target": "native:nativeExecuteImpl",
+      "kind": "taie_java_to_native"
+    },
+    {
+      "source": "java:nativeCallbackExec",
+      "target": "native:nativeCallbackExecImpl",
+      "kind": "taie_java_to_native"
+    },
+    {
+      "source": "java:nativeReflectInvoke",
+      "target": "native:nativeReflectInvokeImpl",
+      "kind": "taie_java_to_native"
+    }
+  ],
+  "points_to": {
+    "java_to_native_bindings": {
+      "nativeReadFile": [
+        "nativeReadFileImpl"
+      ],
+      "nativeExecute": [
+        "nativeExecuteImpl"
+      ],
+      "nativeCallbackExec": [
+        "nativeCallbackExecImpl"
+      ],
+      "nativeReflectInvoke": [
+        "nativeReflectInvokeImpl"
+      ]
+    },
+    "native_to_java_callbacks": {
+      "nativeCallbackExecImpl": [
+        "java:reflectiveSink"
+      ],
+      "nativeReflectInvokeImpl": [
+        "java:reflectiveSink"
+      ]
+    }
+  }
+}
